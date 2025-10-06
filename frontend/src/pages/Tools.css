@@ -1,0 +1,32 @@
+/* src/pages/Tools.css */
+
+/* ดึงสไตล์พื้นฐานจาก Plants.css มาใช้ซ้ำ (breadcrumb, การ์ด, กริด ฯลฯ) */
+@import "./Plants.css";
+
+/* ====== ปรับเฉพาะหน้าอุปกรณ์ (Tools) ให้ดูต่างออกเล็กน้อย ====== */
+
+/* เน้นคำว่า "อุปกรณ์" ใน hero เป็นโทนฟ้า */
+.plants-hero .hl {
+  color: #1d4ed8; /* blue-700 */
+}
+
+/* เฉดพื้นหลังรูปการ์ดให้ดูสว่างขึ้นนิดหน่อย */
+.plant-card .thumb {
+  background: #f3f4f6; /* gray-100 */
+}
+
+/* โฮเวอร์การ์ดให้แรงขึ้นนิดหน่อยบนหน้าอุปกรณ์ */
+.plant-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.12);
+}
+
+/* กรณีอยากเว้นระยะ grid ของหน้า tools มากขึ้น */
+.plants-categories {
+  gap: 18px;
+}
+@media (min-width: 768px) {
+  .plants-categories {
+    gap: 20px;
+  }
+}

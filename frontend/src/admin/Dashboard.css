@@ -1,0 +1,126 @@
+/* =========================================================
+ * Dashboard Theme — High Contrast (Plant Shop)
+ * วางทับไฟล์เดิมได้เลย
+ * =======================================================*/
+
+/* -------- Variables (คอนทราสต์สูงขึ้น) -------- */
+:root{
+  --ink:#0b1324;          /* ตัวหนังสือหลัก เข้มขึ้น */
+  --muted:#3f4b60;        /* ตัวหนังสือรอง */
+  --card:#ffffff;
+  --surface:#f5faf6;      /* เขียวอ่อนกว่าก่อนหน้าเล็กน้อย */
+  --ring:#d6dee7;         /* เส้นขอบเข้มขึ้น (ชัดขึ้น) */
+
+  /* Brand */
+  --brand-50:#e9f4e8;
+  --brand-200:#a8d6a4;
+  --brand:#5aa557;        /* ใช้เป็น primary */
+  --brand-600:#4a944a;
+  --brand-700:#3c7c3c;
+
+  /* Earth accent */
+  --soil-500:#9a7a5f;
+
+  /* Semantic สีชัด */
+  --info-100:#e7f0ff;   --info-500:#2563eb;
+  --success-100:#eaf7ee;--success-500:#15803d;
+  --warning-100:#fff3cd;--warning-500:#d97706;
+  --danger-100:#ffe4e6; --danger-500:#dc2626;
+
+  /* Grays */
+  --gray-50:#f8fafc;
+  --gray-100:#f3f4f6;
+  --gray-200:#e5e7eb;
+  --gray-300:#d1d5db;
+  --gray-400:#9ca3af;
+  --gray-500:#6b7280;
+
+  /* Chart palette (สด-ตัดกันชัด) */
+  --chart-1:#4a944a;   /* green (primary) */
+  --chart-2:#2563eb;   /* blue */
+  --chart-3:#9a7a5f;   /* soil brown */
+  --chart-4:#ef4444;   /* red */
+  --chart-5:#f59e0b;   /* amber */
+  --chart-6:#8b5cf6;   /* violet */
+  --chart-7:#10b981;   /* emerald */
+  --chart-8:#14b8a6;   /* teal */
+}
+
+body{ background: var(--surface); color: var(--ink); }
+
+/* ============ LAYOUT ============ */
+.dashboard-container { @apply flex flex-col gap-6 md:gap-8; }
+
+/* ============ KPI CARDS ============ */
+.stat-card{
+  @apply relative rounded-2xl bg-white shadow-sm border p-4 md:p-5;
+  border-color: var(--ring);
+  background:
+    linear-gradient(to right, color-mix(in srgb, var(--brand) 44%, transparent), transparent) 0 0/100% 6px no-repeat,
+    linear-gradient(#fff,#fff);
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.stat-card:hover{ @apply shadow-md; transform: translateY(-1.5px); }
+.stat-card-title{ @apply text-sm font-medium; color: var(--muted); }
+.stat-card-value{
+  @apply text-3xl md:text-4xl font-bold mt-1 tracking-tight;
+  color: var(--ink);
+}
+
+/* ============ CHART BOX ============ */
+.chart-box{
+  @apply rounded-2xl bg-white shadow-sm border p-4 md:p-5;
+  border-color: var(--ring);
+}
+.chart-title{ @apply font-semibold text-base md:text-lg mb-2; color: var(--ink); }
+.chart-subtitle{ @apply text-sm mb-3; color: var(--muted); }
+.chart-box canvas{ max-height: 360px; }
+@media (max-width: 768px){ .chart-box canvas{ max-height: 300px; } }
+
+/* ============ DATA TABLES ============ */
+.table-wrapper{ @apply overflow-auto rounded-xl border; border-color: var(--ring); background:#fff; }
+.table-wrapper table{ @apply min-w-full text-sm; }
+.table-wrapper thead{ position: sticky; top: 0; z-index: 10; background: var(--gray-50); }
+.table-wrapper th{
+  @apply text-left px-3 py-2 font-semibold;
+  color: var(--ink);
+  border-bottom: 1px solid var(--ring);
+}
+.table-wrapper td{ @apply px-3 py-2; color: var(--ink); }
+.table-wrapper tbody tr{ border-top: 1px solid var(--ring); }
+.table-wrapper tbody tr:nth-child(odd){ background: #fff; }
+.table-wrapper tbody tr:nth-child(even){ background: var(--gray-50); }
+.table-wrapper tbody tr:hover{ background: var(--gray-100); }
+
+/* ป้ายสถานะ (ชัดขึ้น) */
+.badge{ @apply inline-block px-2 py-0.5 rounded-full text-xs font-semibold; }
+.badge-pending{ background: var(--warning-100); color: var(--warning-500); }
+.badge-paid{ background: var(--success-100); color: var(--success-500); }
+.badge-shipped{ background: var(--info-100); color: var(--info-500); }
+.badge-cancelled{ background: var(--danger-100); color: var(--danger-500); }
+
+/* ============ DATE FILTER ============ */
+.date-filter{ @apply flex items-center gap-2; }
+.date-filter input[type="date"]{
+  @apply border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2;
+  border-color: var(--ring);
+}
+.date-filter button{
+  @apply px-3 py-1 rounded text-sm transition font-medium;
+  background: linear-gradient(180deg, #ffffff, #f2f5f9);
+  border: 1px solid var(--ring);
+  color: var(--ink);
+}
+.date-filter button:hover{ @apply shadow-sm; }
+
+/* Scrollbar */
+.table-wrapper::-webkit-scrollbar{ height: 10px; }
+.table-wrapper::-webkit-scrollbar-thumb{ background: var(--gray-300); border-radius: 9999px; }
+.table-wrapper::-webkit-scrollbar-thumb:hover{ background: var(--gray-400); }
+
+/* (ออปชัน) ธีมมืด */
+.theme-dark{
+  --ink:#e6edf5; --muted:#b7c2d2; --card:#0f172a; --surface:#0b1311; --ring:#2a3647;
+  --brand:#5aa557; --brand-700:#7fd27a; --soil-500:#b79273;
+  --gray-50:#0f172a; --gray-100:#111827; --gray-200:#1f2937; --gray-300:#374151; --gray-400:#6b7280;
+}

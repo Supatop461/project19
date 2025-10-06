@@ -1,0 +1,231 @@
+/* FRONTEND: src/admin/ProductManagement.css */
+/* โทนเดียวกับหน้าล็อกอิน/สมัคร ใช้สีแบรนด์และโครงแบบสะอาดตา */
+
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
+
+:root{
+  --text:#283321;
+  --muted:#6b6b6b;
+  --bg:#ffffff;
+  --panel:#ffffff;
+  --input:#f3f3f3;
+  --border:#d8d8d8;
+  --brand:#6fb36a;
+  --brand-dark:#5aa657;
+  --danger:#e74c3c;
+  --warn:#f39c12;
+  --ok:#2ecc71;
+}
+
+/* ===== Page Scope ===== */
+.pm-page{
+  font-family:"Sarabun",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  color:var(--text);
+}
+.pm-page h2{ margin: 10px 0 14px; font-weight:700; }
+.pm-page h3{ margin: 20px 0 10px; font-weight:700; }
+
+/* ===== Panels / Forms ===== */
+.pm-panel{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:14px;
+}
+.pm-form{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:10px 12px;
+}
+.pm-form input,
+.pm-form select,
+.pm-form textarea{
+  width:100%;
+  padding:10px 12px;
+  border:1px solid var(--border);
+  background:#fff;
+  border-radius:8px;
+  outline:none;
+}
+.pm-form textarea{ min-height:100px; resize:vertical; }
+.pm-form .col-span-2{ grid-column:1 / -1; }
+.pm-input-group.pm-row-3{
+  display:grid; grid-template-columns:1fr 160px 160px; gap:10px;
+}
+.pm-actions{ display:flex; gap:8px; align-items:center; margin-top:4px; }
+
+/* ===== Buttons ===== */
+.btn{ 
+  display:inline-flex; align-items:center; justify-content:center;
+  padding:8px 12px; border:1px solid transparent; border-radius:8px;
+  font-weight:600; cursor:pointer; background:#fff; color:#333;
+}
+.btn:hover{ filter:brightness(0.98); }
+.btn:disabled{ opacity:0.5; cursor:not-allowed; }
+.btn-primary{ background:var(--brand); color:#fff; border-color:var(--brand); }
+.btn-primary:hover{ background:var(--brand-dark); border-color:var(--brand-dark); }
+.btn-ghost{ background:#fff; color:#333; border-color:var(--border); }
+.btn-ghost:hover{ background:#fafafa; }
+.btn-warn{ background:#fff7e6; color:#945d00; border-color:#ffd9a3; }
+.btn-warn:hover{ background:#ffefcf; }
+.btn-danger{ background:#ffe9e7; color:#b33a2d; border-color:#ffc7c1; }
+.btn-danger:hover{ background:#ffe0dc; }
+.btn-xxs{
+  padding:4px 8px; font-size:12px; border:1px solid var(--border); border-radius:6px;
+  background:#fff; cursor:pointer; color:#333;
+}
+.btn-xxs.danger{ border-color:#ffc7c1; color:#b33a2d; }
+
+/* ===== Toolbar / Segmented Filter ===== */
+.pm-toolbar{
+  display:flex; gap:12px; align-items:center; justify-content:space-between;
+  margin:10px 0 14px;
+}
+.pm-check{ display:inline-flex; align-items:center; gap:6px; color:#333; }
+.seg{
+  display:flex; gap:0; border:1px solid #d8e2dc; border-radius:10px;
+  overflow:hidden; background:#fff;
+}
+.seg-btn{
+  padding:8px 14px; border:0; background:#fff; cursor:pointer; font-weight:600; color:#333;
+}
+.seg-btn + .seg-btn{ border-left:1px solid #d8e2dc; }
+.seg-btn.active{ background:#2e7d32; color:#fff; }
+
+/* ===== ปุ่ม toggle “แสดงสินค้าที่เก็บแล้ว” ===== */
+.btn-archived{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  border:1.5px solid var(--brand, #6fb36a);
+  background:#fff;
+  color:var(--brand-dark, #5aa657);
+  padding:8px 14px;
+  border-radius:999px;
+  font-weight:700;
+  cursor:pointer;
+  transition:all .15s ease;
+  white-space:nowrap;
+}
+.btn-archived .icon{ font-size:18px; line-height:1; }
+.btn-archived:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 16px rgba(15,23,42,.08);
+}
+.btn-archived.active{
+  background:var(--brand, #6fb36a);
+  color:#fff;
+  border-color:transparent;
+}
+.btn-archived:focus-visible{
+  outline:3px solid var(--brand-dark, #5aa657);
+  outline-offset:2px;
+}
+
+/* ===== Status Badges / Pills ===== */
+.badge-muted{
+  display:inline-block; margin-left:6px; padding:2px 8px; border-radius:999px;
+  background:#efefef; color:#555; font-size:12px; font-weight:600;
+}
+.badge-archived{
+  display:inline-block; margin-left:6px; padding:2px 8px; border-radius:999px;
+  background:#ffe7cc; color:#8a5300; font-size:12px; font-weight:700;
+}
+.pill{
+  display:inline-block; padding:4px 10px; margin-right:8px;
+  border-radius:999px; font-weight:700; font-size:12px; line-height:1; vertical-align:middle;
+  border:1px solid transparent;
+}
+.pill.on{ background:#e8f5e9; color:#1b5e20; border-color:#c8e6c9; }
+.pill.off{ background:#f3f3f3; color:#555; border-color:#e0e0e0; }
+.name-with-badges{ vertical-align:middle; }
+
+/* ===== Table ===== */
+.pm-table-wrap{ width:100%; overflow:auto; border:1px solid var(--border); border-radius:12px; }
+.pm-table{
+  width:100%;
+  border-collapse:collapse;      /* ใช้ collapse ให้เส้นตรง */
+  table-layout:fixed;            /* บังคับคอลัมน์ตรงกัน */
+}
+.pm-table thead th{
+  background:#f7f7f7; color:#333; font-weight:700; text-align:left;
+  padding:10px 12px; border-bottom:1px solid var(--border);
+  position:sticky; top:0; z-index:1;
+}
+.pm-table tbody td{
+  padding:10px 12px;
+  border-bottom:1px solid #eee;
+  vertical-align:middle;         /* จัดกึ่งกลางแนวตั้ง */
+  word-break:break-word;
+}
+.pm-table tr:hover td{ background:#fafafa; }
+
+/* แถวที่ถูกเก็บ: ให้ดูจางลงเล็กน้อย */
+.pm-table tr.is-archived td{
+  opacity:.78;
+}
+
+/* กำหนดความกว้างคอลัมน์ */
+.pm-fixed col.col-id{ width:120px; }
+.pm-fixed col.col-name{ width:auto; }
+.pm-fixed col.col-type{ width:160px; }
+.pm-fixed col.col-cat{ width:200px; }
+.pm-fixed col.col-imgact{ width:180px; }
+.pm-fixed col.col-thumb{ width:110px; }
+
+/* แนวตั้งสองปุ่ม */
+.action-stack{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  align-items:center;
+  justify-content:center;
+  min-height:72px;
+}
+.action-stack .btn{ width:140px; }
+
+/* cell แสดงผล (ปุ่ม toggle) */
+.pm-table .cell-actions{
+  text-align:center;
+}
+.pm-table .cell-actions .btn{ min-width:120px; }
+
+/* คอลัมน์รูป */
+.thumb-cell{ text-align:center; }
+.thumb-img{
+  width:64px; height:64px; object-fit:cover;
+  border-radius:8px; border:1px solid var(--border);
+  display:inline-block; background:#fafafa;
+}
+.thumb-placeholder{
+  width:64px; height:64px; border:1px dashed var(--border); border-radius:8px;
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:12px; color:#999; background:#fff;
+}
+
+/* ===== Files preview ===== */
+.pm-files-preview{
+  display:grid; gap:10px; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
+  border:1px dashed var(--border); border-radius:10px; padding:10px;
+}
+.pm-file{
+  border:1px solid #eee; border-radius:10px; overflow:hidden; background:#fff; position:relative;
+}
+.pm-file img{ width:100%; height:140px; object-fit:cover; display:block; background:#f6f7f8; }
+.pm-badge{
+  position:absolute; left:8px; top:8px; background:#111; color:#fff; border-radius:999px;
+  padding:2px 8px; font-size:12px; font-weight:700;
+}
+.pm-meta{ padding:8px; display:grid; gap:6px; }
+.pm-name{ font-size:13px; color:#333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pm-actions{ display:flex; gap:6px; }
+
+/* ===== Misc ===== */
+.mt-8{ margin-top:8px; }
+.mt-16{ margin-top:16px; }
+.pm-form input[name="image_url"]{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size:13px;
+}
+.pm-table .cell-actions a.btn{ text-decoration:none; }
+.pm-check input{ transform:translateY(1px); }

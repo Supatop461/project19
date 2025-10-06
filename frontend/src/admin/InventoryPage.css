@@ -1,0 +1,95 @@
+/* ============ THEME ============ */
+:root{
+  --brand:#6fb36a; --brand-600:#5aa557; --brand-700:#4c8f4a;
+  --ink:#0f172a; --muted:#64748b; --line:#e2e8f0;
+  --bg:#f3f6f9; --bg-soft:#f8fafc; --card:#ffffff;
+  --danger:#dc2626; --danger-700:#b91c1c;
+  --radius:14px; --radius-sm:10px; --shadow:0 6px 18px rgba(16,24,40,.06);
+}
+
+/* ============ PAGE WRAPPER ============ */
+.inv{ max-width:1100px; margin:24px auto; padding:16px 20px; }
+@media (max-width:1280px){ .inv{ max-width:980px; } }
+@media (max-width:1024px){ .inv{ max-width:860px; } }
+@media (max-width:768px){ .inv{ margin:16px auto; padding:12px; } }
+.inv-title{ font-size:1.6rem; font-weight:800; color:var(--ink); letter-spacing:.2px; }
+
+/* ============ TABS ============ */
+.inv-tabs{ display:flex; gap:.5rem; flex-wrap:wrap; margin-top:14px; }
+.inv-tab{ border:1px solid var(--line); background:var(--card); border-radius:999px; padding:.55rem .95rem; font-weight:700; color:var(--ink); transition:.2s; }
+.inv-tab:hover{ border-color:var(--brand); transform:translateY(-1px); }
+.inv-tab.is-active{ background:#0f2238; color:#fff; border-color:#0f2238; }
+.inv-section{ margin-top:18px; }
+
+/* ============ FILTER / FORM ============ */
+.inv-filterRow{ display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px 16px; margin-bottom:8px; }
+.inv-form{ display:grid; gap:12px; max-width:920px; }
+.inv-field{ display:block; min-width:230px; }
+.inv-field--full{ grid-column:1 / -1; }
+.inv-field--grow{ min-width:260px; flex:1; }
+.inv-label{ display:block; font-size:.9rem; color:var(--ink); margin:0 0 .35rem 2px; font-weight:700; }
+.inv-input,.inv-select{ width:100%; border:1px solid var(--line); border-radius:var(--radius-sm); padding:.62rem .8rem; min-height:42px; outline:none; background:#fff; transition:.15s; font-size:.95rem; }
+.inv-input:focus,.inv-select:focus{ border-color:var(--brand); box-shadow:0 0 0 3px rgba(111,179,106,.18); }
+input[type="datetime-local"].inv-input,input[type="date"].inv-input,input[type="time"].inv-input{ line-height:1; padding:.52rem .8rem; min-height:42px; }
+.inv-help{ font-size:.8rem; color:var(--muted); margin-top:.35rem; }
+.inv-mini{ font-size:.8rem; color:#475569; margin-top:.35rem; }
+.inv-grid2{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.inv-grid5{ display:grid; grid-template-columns:2fr 1fr 1fr 1fr 1fr; gap:12px; }
+@media (max-width:1024px){ .inv-grid5{ grid-template-columns:2fr 1fr 1fr; } }
+@media (max-width:768px){ .inv-grid2,.inv-grid5{ grid-template-columns:1fr; } }
+
+/* ============ BUTTONS ============ */
+.inv-btn{ border:1px solid var(--line); background:var(--card); padding:.62rem 1rem; border-radius:12px; font-weight:800; transition:.2s; cursor:pointer; }
+.inv-btn:disabled{ opacity:.55; cursor:not-allowed; }
+.inv-btn:hover{ box-shadow:var(--shadow); transform:translateY(-1px); }
+.inv-btn--primary{ background:var(--brand); color:#fff; border-color:var(--brand); }
+.inv-btn--primary:hover{ background:var(--brand-600); border-color:var(--brand-600); }
+.inv-btn--success{ background:#16a34a; color:#fff; border-color:#16a34a; }
+.inv-btn--success:hover{ background:#15803d; border-color:#15803d; }
+.inv-btn--danger{ background:var(--danger); color:#fff; border-color:var(--danger); }
+.inv-btn--danger:hover{ background:var(--danger-700); border-color:var(--danger-700); }
+
+/* ============ TABLES ============ */
+.inv-tableWrap{ border:1px solid var(--line); border-radius:var(--radius); overflow:auto; background:var(--card); box-shadow:var(--shadow); margin-top:10px; }
+.inv-table{ width:100%; border-collapse:separate; border-spacing:0; min-width:760px; }
+.inv-table thead tr th{ position:sticky; top:0; z-index:1; background:var(--bg-soft); text-align:left; padding:.7rem .8rem; font-size:.92rem; letter-spacing:.2px; color:#334155; border-bottom:1px solid var(--line); }
+.inv-table tbody tr td{ padding:.72rem .8rem; border-top:1px solid var(--line); vertical-align:middle; }
+.inv-table tbody tr:hover td{ background:#fbfdfb; }
+.inv-table tbody tr:nth-child(2n) td{ background:#fcfdfc; }
+.inv-cellMain{ font-weight:700; }
+
+/* กำหนดความกว้างบางคอลัมน์ของ Moves ให้พอดีหน้า */
+.inv-table .col-time{ width:190px; }
+.inv-table .col-type{ width:90px; }
+.inv-table .col-qty{ width:100px; text-align:right; }
+.inv-table .col-lot{ width:90px; }
+.inv-table .col-prod{ min-width:260px; }
+.inv-table .col-variant{ width:110px; }
+.inv-table .col-note{ min-width:220px; }
+@media (max-width:900px){ .inv-table .col-prod{ min-width:220px; } }
+
+/* ============ PAGER ============ */
+.inv-pager{ display:flex; align-items:center; gap:.6rem; margin-top:.75rem; }
+.inv-pager__info{ font-size:.92rem; color:var(--muted); }
+
+/* ============ JSON DETAILS ============ */
+.inv-json{ margin-top:.85rem; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--card); }
+.inv-json__toggle{ width:100%; text-align:left; padding:.6rem .85rem; background:var(--bg-soft); border-bottom:1px solid var(--line); font-weight:800; }
+.inv-json__pre{ padding:.8rem; font-size:.82rem; overflow:auto; }
+
+/* ============ TOOLBAR & CHIPS ============ */
+.inv-toolbar{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:4px; }
+.inv-chipWrap{ display:flex; align-items:center; gap:8px; }
+.inv-chipLabel{ font-size:.9rem; color:var(--muted); margin-right:2px; }
+.inv-chip{ border:1px solid var(--line); background:var(--card); padding:.38rem .65rem; border-radius:999px; font-weight:800; cursor:pointer; transition:.15s; }
+.inv-chip:hover{ border-color:var(--brand); }
+.inv-chip.is-active{ background:#0f2238; color:#fff; border-color:#0f2238; }
+.inv-exportBtns{ display:flex; gap:8px; }
+
+/* ============ UTILITIES/OVERRIDES ============ */
+.text-left{ text-align:left; } .text-right{ text-align:right; }
+.p-3{ padding:.75rem; } .p-4{ padding:1rem; } .mt-2{ margin-top:.5rem; }
+.inv .inv-input,.inv .inv-select{ border:1px solid var(--line) !important; background:#fff !important; }
+.inv .inv-tab{ border:1px solid var(--line) !important; }
+.inv .inv-tab.is-active{ background:#0f2238 !important; color:#fff !important; border-color:#0f2238 !important; }
+.inv .inv-table thead tr th{ background:var(--bg-soft) !important; }

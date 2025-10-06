@@ -1,0 +1,133 @@
+/* ===== THEME TOKENS ===== */
+:root{
+  --brand:#6fb36a;
+  --brand-600:#5aa557;
+  --brand-700:#4c8f4a;
+  --ink:#0f172a;
+  --muted:#64748b;
+
+  --line:#e5e7eb;
+  --surface:#f8fafc;
+
+  --neutral:#6b7280;
+  --success:#16a34a;
+  --processing:#3b82f6;
+  --shipped:#10b981;
+  --warning:#f59e0b;
+  --danger:#ef4444;
+  --refund:#8b5cf6;
+}
+
+/* Layout & base */
+.om-container { padding: 16px; color: var(--ink); }
+.om-title { margin: 0 0 12px; }
+
+/* Filter bar */
+.om-filter{
+  display:grid;
+  grid-template-columns:1fr 160px 140px 140px auto;
+  gap:8px; align-items:center; margin-bottom:12px;
+}
+.om-actions{ display:flex; gap:8px; justify-content:flex-end; }
+
+.om-input{
+  padding:8px; border:1px solid var(--line);
+  border-radius:8px; background:#fff; color:var(--ink);
+}
+.om-input:focus{
+  outline:2px solid color-mix(in srgb, var(--brand) 30%, transparent);
+  border-color:var(--brand-600);
+}
+
+/* Buttons */
+.om-btn{
+  padding:8px 12px; border-radius:10px;
+  border:1px solid var(--brand-600);
+  background:var(--brand); color:#fff; cursor:pointer;
+  transition:background .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.om-btn:hover{ background:var(--brand-600); border-color:var(--brand-700); }
+.om-btn:active{ background:var(--brand-700); }
+.om-btn:focus{ outline:none; box-shadow:0 0 0 3px color-mix(in srgb, var(--brand) 35%, transparent); }
+.om-btn:disabled{ opacity:.5; cursor:default; }
+
+.om-btn-secondary{
+  border-color:var(--muted);
+  background:var(--muted); color:#fff;
+}
+.om-btn-secondary:hover{ filter:brightness(.95); }
+
+.om-btn-outline{
+  background:transparent; color:var(--brand-700);
+  border-color:var(--brand-600);
+}
+.om-btn-outline:hover{ background:color-mix(in srgb, var(--brand) 12%, #fff); }
+
+/* Pagination */
+.om-pagination{ display:flex; gap:8px; align-items:center; margin:8px 0; }
+.om-pageinfo{ color:#374151; }
+
+/* Table */
+.om-tablewrap{ overflow-x:auto; }
+.om-table{ width:100%; min-width:960px; border-collapse:collapse; }
+.om-th{
+  text-align:left; padding:10px 8px;
+  background:var(--surface); border-bottom:1px solid var(--line);
+  font-weight:600; color:var(--ink);
+}
+.om-td{ padding:10px 8px; vertical-align:top; }
+.om-tr{ border-top:1px solid #eee; }
+.om-num{ text-align:right; }
+.om-ellipsis{
+  white-space:nowrap; text-overflow:ellipsis; overflow:hidden; max-width:240px;
+}
+
+/* Status badge */
+.om-badge{
+  display:inline-block; padding:2px 10px;
+  border-radius:999px; color:#fff; font-size:12px;
+  background:var(--neutral); /* default */
+}
+.om-badge.status-paid{ background:var(--brand-700); }
+.om-badge.status-completed{ background:var(--brand); }
+.om-badge.status-processing,
+.om-badge.status-o1{ background:var(--processing); }
+.om-badge.status-shipped,
+.om-badge.status-o2{ background:var(--shipped); }
+.om-badge.status-pending{ background:var(--warning); }
+.om-badge.status-cancelled{ background:var(--danger); }
+.om-badge.status-refunded{ background:var(--refund); }
+
+/* Tracking inline */
+.om-trk{ display:flex; gap:6px; min-width:260px; }
+.om-trk input.om-input{ flex:1; }
+
+/* Modal */
+.om-modal-backdrop{
+  position:fixed; inset:0; background:rgba(0,0,0,.4);
+  display:flex; align-items:center; justify-content:center; z-index:9999;
+}
+.om-modal{
+  background:#fff; padding:16px; border-radius:12px;
+  min-width:800px; max-width:90vw; max-height:85vh; overflow:auto;
+  box-shadow:0 10px 30px rgba(0,0,0,.12);
+}
+.om-modal-title{ margin:0 0 6px; }
+.om-order-meta{ margin-bottom:12px; font-size:14px; color:#555; }
+.om-modal-actions{ text-align:right; margin-top:12px; }
+
+/* Item in detail */
+.om-item{ display:flex; align-items:center; gap:8px; }
+.om-thumb{
+  width:40px; height:40px; object-fit:cover; border-radius:8px;
+  background:#f1f5f9; border:1px solid var(--line);
+}
+.om-thumb.om-thumb-na{
+  display:grid; place-items:center; font-size:12px; color:#94a3b8;
+}
+.om-item-name{ font-weight:600; }
+.om-item-sub{ font-size:12px; color:#6b7280; }
+
+/* States */
+.om-loading{ padding:8px; }
+.om-error{ color:crimson; margin-bottom:8px; }

@@ -1,0 +1,191 @@
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
+
+/* ---------- Theme ---------- */
+:root{
+  --text:#283321;
+  --muted:#6b6b6b;
+  --bg:#ffffff;
+  --beige:#e6ddd2;         /* แถบเฮด */
+  --input:#e7e7e7;         /* ช่องเทาอ่อนตามภาพ */
+  --border:#d8d8d8;
+  --brand:#6fb36a;         /* ปุ่มเขียว */
+  --brand-dark:#5aa657;
+  --focus-ring: rgba(111,179,106,.28);
+}
+
+/* ---------- Base ---------- */
+*{ box-sizing:border-box; }
+html, body{ height:100%; }
+body{ font-family:"Sarabun",system-ui,sans-serif; color:var(--text); background:var(--bg); line-height:1.4; }
+
+/* ---------- Hero / Logo ---------- */
+.signup-page{ background:var(--bg); }
+.signup-hero{
+  height:140px;
+  background: var(--beige);
+  margin: 24px 32px 70px;
+  border-radius: 6px;
+  position: relative;
+  z-index: 0;
+}
+.notch{
+  position:absolute; left:50%; bottom:-42px; transform:translateX(-50%);
+  width:180px; height:110px;
+  background:#fff; border-radius:24px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.08);
+  display:grid; place-items:center;
+  z-index:1;
+  pointer-events:none;      /* ให้คลิกทะลุโลโก้ได้ */
+}
+.notch img{ width:110px; height:auto; object-fit:contain; }
+
+.brand-head{ text-align:center; margin-top:-10px; }
+.brand-line{ display:flex; align-items:baseline; justify-content:center; gap:8px; }
+.brand{ font-weight:700; letter-spacing:.4px; }
+.online{ font-size:.8rem; letter-spacing:2px; color:#6f6f6f; }
+.brand-head h2{ margin: 8px 0 16px; font-weight:700; font-size:1.4rem; }
+
+/* ---------- Form grid (2 columns) ---------- */
+.signup-form{
+  position: relative; z-index:2;
+  max-width: 980px;
+  margin: 0 auto 40px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 32px;           /* row-gap, column-gap */
+  padding: 0 24px;
+}
+.col{ display: grid; gap: 8px; }
+.label{ font-weight:600; color:#222; }
+
+/* Controls */
+input, textarea, select{
+  background: var(--input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  height: 48px;
+  padding: 0 14px;
+  font-size: 1rem;
+  outline: none;
+}
+textarea{
+  padding: 12px 14px;
+  height: 120px;
+  resize: vertical;
+}
+input::placeholder, textarea::placeholder{ color:#9c9c9c; }
+
+/* Focus accessibility */
+input:focus-visible, textarea:focus-visible, select:focus-visible{
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+  background: #fff;
+}
+
+/* Password + toggle */
+.pw-wrap{ position:relative; }
+.pw-toggle{
+  position:absolute; right:8px; top:50%; transform:translateY(-50%);
+  height:34px; width:34px; display:grid; place-items:center;
+  border:none; background:transparent; cursor:pointer; font-size:1.05rem;
+}
+
+/* Span helpers */
+.span-2{ grid-column: 1 / -1; } /* เต็มสองคอลัมน์ */
+
+/* กลุ่มขวา (วันเกิด/เพศ) */
+.right-group{ display:grid; gap:18px; }
+
+/* วันเกิด = 3 กล่องเล็ก */
+.dob{ display:flex; gap:10px; }
+.dob input{ width:72px; text-align:center; padding:0 10px; height:48px; }
+
+/* ---------- เพศ: radio ปรับเป็นปุ่ม pill ---------- */
+.radios{ display:flex; flex-wrap:wrap; gap:16px; align-items:center; }
+.radio-item{ position:relative; }
+.radio-item input[type="radio"]{ display:none; }
+.radio-item label{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:80px;
+  padding:10px 18px;
+  border:1px solid var(--border);
+  border-radius:999px;
+  background:#fff;
+  cursor:pointer;
+  font-weight:600;
+  font-size:0.95rem;
+  transition:all .2s ease;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+.radio-item input[type="radio"]:checked + label{
+  background:var(--brand);
+  color:#fff;
+  border-color:var(--brand-dark);
+  box-shadow:0 4px 10px rgba(0,0,0,0.15);
+  transform:translateY(-1px);
+}
+.radio-item label:hover{
+  border-color:var(--brand);
+  box-shadow:0 3px 8px rgba(0,0,0,0.1);
+}
+
+/* ---------- ปุ่มส่ง ---------- */
+.actions{ display:flex; justify-content:center; margin-top:8px; }
+.btn-primary{
+  background: var(--brand);
+  color:#fff; border:none; height:46px; padding:0 28px;
+  border-radius: 999px; font-weight:700; letter-spacing:.3px;
+  cursor:pointer;
+}
+.btn-primary:hover{ background: var(--brand-dark); }
+.btn-primary:disabled{ opacity:.6; cursor:not-allowed; }
+
+/* error */
+.form-error{
+  grid-column: 1 / -1;
+  background:#ffe9e9; border:1px solid #f2c2c2; color:#a52525;
+  border-radius:8px; padding:10px 12px;
+}
+.is-invalid{
+  border: 1px solid #ff7875 !important;
+  background: #fff1f0 !important;
+}
+.hint-error{
+  color: #cf1322;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* ===== Address (บ้านเลขที่ + จังหวัด/อำเภอ/ตำบล/รหัสไปรษณีย์) ===== */
+.addr-grid{
+  display: grid;
+  grid-template-columns: 2.2fr 1fr 1fr 1fr 0.9fr;
+  gap: 14px;
+  margin-top: 8px;
+}
+.addr-grid input[type="text"],
+.addr-grid select{
+  background: var(--input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  height: 48px;
+  padding: 0 14px;
+  font-size: 1rem;
+  outline: none;
+}
+.addr-grid select:disabled{
+  opacity: .6;
+  cursor: not-allowed;
+}
+.addr-grid .housewide{ grid-column: 1 / -1; }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px){
+  .signup-form{ grid-template-columns: 1fr; }
+  .dob{ gap:8px; }
+  .dob input{ width: 100%; flex: 1 1 0; }
+  .right-group select{ width: 100%; }
+  .addr-grid{ grid-template-columns: 1fr; }
+}

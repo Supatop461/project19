@@ -1,0 +1,87 @@
+/* src/components/AdminLayout.css */
+.admin-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #f8f9fa;
+}
+
+/* Navbar */
+.admin-navbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: white;
+  padding: 14px 28px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2e7d32;
+  letter-spacing: 1px;
+}
+
+.admin-menu {
+  display: flex;
+  gap: 18px;
+}
+
+.admin-link {
+  text-decoration: none;
+  color: #555;
+  font-weight: 500;
+  padding: 8px 14px;
+  border-radius: 6px;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-link:hover {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.admin-link.active {
+  background: #2e7d32;
+  color: white;
+}
+
+.logout-btn {
+  background: #ef5350;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.3s;
+}
+
+.logout-btn:hover {
+  background: #c62828;
+}
+
+.admin-content {
+  flex: 1;
+  padding: 24px;
+}
+
+
+/* Badge NEW สำหรับเมนู Orders */
+.badge-new {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #fff;
+  background: var(--brand-600, #5aa557);
+  line-height: 1.4;
+}
