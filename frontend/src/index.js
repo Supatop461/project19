@@ -6,7 +6,7 @@ import App from './App';
 import axios from 'axios';
 
 /* =========================
-   1) Axios Global Config อ่านอีกเเล้ว
+   1) Axios Global Config อ่านนะ
    ========================= */
 // ❗ เปลี่ยน default เป็นโดเมนอย่างเดียว (ไม่มี /api)
 // จากนี้ endpoint ทุกที่ในโปรเจกต์ ให้ขึ้นต้นด้วย /api/...
