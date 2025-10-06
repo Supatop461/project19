@@ -25,9 +25,7 @@ if (bootToken) {
   axios.defaults.headers.common['Authorization'] = `Bearer ${bootToken}`;
 }
 
-/* =========================
-   2) Interceptors (แนะนำให้มี)
-   ========================= */
+//arn
 const IS_DEV = process.env.NODE_ENV !== 'production';
 
 // helper สร้าง URL ไว้โชว์ใน log
