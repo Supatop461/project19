@@ -1,252 +1,407 @@
-// [FRONTEND] src/admin/AdminUnits.js
-// ✅ จัดการ "หน่วยสินค้า" แยกหน้า
-// - ลิสต์/เพิ่ม/แก้ไข/ลบ หน่วย (code + label)
-// - ถ้า backend มี publish toggle: ใช้ได้ทันที (fallback เป็นไม่แสดงปุ่ม)
-// - โหลดจาก /units ได้, ถ้าไม่มี API จะใช้ค่า default
-// - ปุ่มกลับไปหน้าสินค้า
+// src/admin/AdminUnits.js
+// ✅ หน่วยสินค้า (product_units) — ฝั่งแอดมิน
+// Endpoints ใช้จริงตอนนี้:
+//   GET    /api/admin/units[?only_visible=1]
+//   POST   /api/admin/units
+//   PUT    /api/admin/units/:code       // :code รองรับเลข id ได้
+//   DELETE /api/admin/units/:code
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import './ProductManagement.css';
-import { api, path } from '../lib/api';
+import './admin-units.css';
 
-const DEFAULT_PRODUCT_UNITS = [
-  { code: 'plant', label: 'ต้น' },
-  { code: 'piece', label: 'ชิ้น' },
-  { code: 'pot',   label: 'กระถาง' },
-  { code: 'bag',   label: 'ถุง' },
-  { code: 'pack',  label: 'แพ็ค' },
-  { code: 'kg',    label: 'กิโลกรัม' },
-  { code: 'g',     label: 'กรัม' },
-  { code: 'ltr',   label: 'ลิตร' },
-  { code: 'ml',    label: 'มิลลิลิตร' },
-];
+const asStr = (v) => (v === null || v === undefined) ? '' : String(v).trim();
+const toArr = (x) => Array.isArray(x) ? x : (x ? [x] : []);
+const uniq = (xs) => Array.from(new Set(xs));
 
-const asStr = (v) => (v === null || v === undefined) ? '' : String(v);
+/* ---------- Toggle Button Group (multi) ---------- */
+function MultiToggle({ options, value = [], onChange }) {
+  const set = new Set((value || []).map(String));
+  const toggle = (id) => {
+    const next = new Set(set);
+    const key = String(id);
+    next.has(key) ? next.delete(key) : next.add(key);
+    onChange(Array.from(next));
+  };
+  return (
+    <div className="mu-wrap">
+      {options.map(opt => {
+        const id = String(opt.value);
+        const active = set.has(id);
+        return (
+          <button
+            type="button"
+            key={id}
+            className={`mu-chip ${active ? 'is-active' : ''}`}
+            onClick={() => toggle(id)}
+            aria-pressed={active}
+            title={opt.label}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- API helpers (ใช้ fetch โดยตรง) ---------- */
+async function httpJSON(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw { status: res.status, response: { data: err } };
+  }
+  return res.json().catch(() => ({}));
+}
+const listUnits = async (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.only_visible) qs.set('only_visible', '1');
+  const url = `/api/admin/units${qs.toString() ? `?${qs}` : ''}`;
+  return httpJSON('GET', url);
+};
+const createUnitAPI = (payload) => httpJSON('POST', '/api/admin/units', payload);
+const updateUnitAPI = (codeOrId, payload) => httpJSON('PUT', `/api/admin/units/${encodeURIComponent(codeOrId)}`, payload);
+const deleteUnitAPI = (codeOrId) => httpJSON('DELETE', `/api/admin/units/${encodeURIComponent(codeOrId)}`);
+
+/* หาคีย์สำหรับ row (code เป็นหลัก, ถ้าไม่มีค่อยใช้ unit_id/id) */
+const unitKey = (u) => u?.code ?? (u?.unit_id ?? u?.id ?? '');
 
 export default function AdminUnits() {
-  const [units, setUnits]       = useState(DEFAULT_PRODUCT_UNITS);
-  const [loading, setLoading]   = useState(false);
-  const [filter, setFilter]     = useState('all'); // all | published | hidden
-  const [supportsPublish, setSupportsPublish] = useState(false); // ตรวจว่ามี endpoint publish ไหม
+  const [loading, setLoading] = useState(false);
+  const [categories, setCategories] = useState([]); // [{value,label}]
+  const [units, setUnits] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [onlyVisible, setOnlyVisible] = useState(false);
 
-  const [newUnit, setNewUnit] = useState({ code: '', label: '' });
+  const [form, setForm] = useState({
+    code: '',
+    unit_name: '',
+    description: '',
+    category_ids: [], // array of TEXT ids
+  });
+  const [editing, setEditing] = useState(null); // เก็บแถวที่กำลังแก้ไข (ใช้ code เป็นหลัก)
 
-  const handleApiError = (err, fallback = 'เกิดข้อผิดพลาด') => {
-    console.error(fallback, err?.response?.data || err?.message || err);
-    alert(err?.response?.data?.error || err?.message || fallback);
+  // ====== focus helpers ======
+  const formWrapRef = useRef(null);
+  const unitNameInputRef = useRef(null);
+  const focusForm = () => {
+    const target = unitNameInputRef.current || formWrapRef.current;
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    unitNameInputRef.current?.focus({ preventScroll: true });
+    formWrapRef.current?.classList.add('flash-focus');
+    setTimeout(() => formWrapRef.current?.classList.remove('flash-focus'), 700);
   };
 
-  // โหลดจาก /units ถ้ามี
-  const fetchUnits = async () => {
-    try {
-      const { data } = await api.get(path('/units'));
-      const list = Array.isArray(data) ? data : (data?.items || []);
-      // normalize: เผื่อ backend ใช้ key อื่น
-      const norm = list.map(u => ({
-        code:  asStr(u.code ?? u.unit_code ?? u.id ?? u.UnitCode ?? ''),
-        label: asStr(u.label ?? u.name ?? u.UnitName ?? ''),
-        is_published: typeof u.is_published === 'boolean' ? u.is_published
-                      : (u.status === 'published' || u.published === true || u.IsPublished === true) || undefined
-      })).filter(u => u.code && u.label);
+  /* ---------- helpers ---------- */
+  const setField = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
-      if (norm.length > 0) setUnits(norm);
-    } catch (err) {
-      console.warn('ℹ️ ใช้ค่า default units (ไม่มี /units หรือเรียกไม่สำเร็จ)', err?.response?.status || err?.message);
-      setUnits(DEFAULT_PRODUCT_UNITS);
+  function extractCategoryIds(u) {
+    if (Array.isArray(u?.category_ids) && u.category_ids.length) {
+      return u.category_ids.map(String);
     }
-  };
-
-  // เช็คว่ามี endpoint publish ไหม (ถ้าเรียกได้สักครั้ง จะเปิดปุ่มให้ใช้)
-  const probePublishSupport = async () => {
-    try {
-      // เรียกแบบไม่เปลี่ยนค่า (แค่เช็ค 404/405)
-      await api.patch(path('/admin/units/__probe__/publish'), { is_published: true });
-      setSupportsPublish(true);
-    } catch (err) {
-      const sc = err?.response?.status;
-      // ถ้า 404/405 แสดงว่าไม่รองรับ
-      setSupportsPublish(false);
+    if (Array.isArray(u?.categories) && u.categories.length) {
+      return u.categories.map(c => String(c.category_id ?? c.id ?? c.code));
     }
-  };
+    if (u?.category_id) return [String(u.category_id)];
+    return [];
+  }
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      await fetchUnits();
-      await probePublishSupport();
+  const isPublishedOn = (u) =>
+    (u?.is_visible !== false) && (u?.is_active !== false) && (u?.is_published !== false);
+
+  /* ---------- load categories + units ---------- */
+  async function loadAll() {
+    setLoading(true);
+    try {
+      // categories (published อย่างเดียว)
+      const catRes = await fetch('/api/categories?published=1', { credentials: 'include' });
+      const catJson = await catRes.json();
+      const cats = (Array.isArray(catJson) ? catJson : []).map(c => ({
+        value: String(c.category_id ?? c.id ?? c.code),
+        label: `${c.category_id ?? c.id ?? c.code} — ${c.category_name ?? c.name}`,
+      }));
+      setCategories(cats);
+
+      // units (admin list — alias ไป handler เดียวกับ /api/units)
+      const data = await listUnits({ only_visible: onlyVisible ? 1 : undefined });
+      setUnits(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+      alert('โหลดข้อมูลไม่สำเร็จ');
+    } finally {
       setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    }
+  }
 
-  const filteredUnits = useMemo(() => {
-    if (!Array.isArray(units)) return [];
-    if (filter === 'all') return units;
-    return units.filter(u => {
-      const pub = typeof u.is_published === 'boolean' ? u.is_published : true;
-      return filter === 'published' ? pub : !pub;
-    });
+  async function refreshUnits() {
+    try {
+      const data = await listUnits({ only_visible: onlyVisible ? 1 : undefined });
+      setUnits(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+      alert('โหลดรายการหน่วยไม่สำเร็จ');
+    }
+  }
+
+  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { refreshUnits(); }, [onlyVisible]); // เปลี่ยน filter แล้วโหลดใหม่
+
+  const rows = useMemo(() => {
+    const q = asStr(filter).toLowerCase();
+    return (units || []).filter(u =>
+      !q ||
+      asStr(u.code).toLowerCase().includes(q) ||
+      asStr(u.unit_name).toLowerCase().includes(q) ||
+      asStr(u.description).toLowerCase().includes(q)
+    );
   }, [units, filter]);
 
-  // เพิ่ม
-  const createUnit = async () => {
-    const code = newUnit.code.trim().toLowerCase().replace(/\s+/g, '_');
-    const label = newUnit.label.trim();
-    if (!label) return alert('กรอกชื่อหน่วย (label)');
-    if (!code)  return alert('กรอกรหัสหน่วย (code)');
+  function startCreate() {
+    setEditing(null);
+    setForm({ code: '', unit_name: '', description: '', category_ids: [] });
+    setTimeout(focusForm, 0);
+  }
 
-    // กันซ้ำในฝั่ง client
-    if (units.some(u => u.code === code || u.label === label)) {
-      return alert(`หน่วย "${label}" มีอยู่แล้ว`);
+  function startEdit(u) {
+    setEditing(u);
+    setForm({
+      code: asStr(u.code),
+      unit_name: asStr(u.unit_name),
+      description: asStr(u.description),
+      category_ids: extractCategoryIds(u),
+    });
+    setTimeout(focusForm, 0);
+  }
+
+  async function doSubmit(e) {
+    e?.preventDefault?.();
+    const ids = uniq(toArr(form.category_ids).map(String));
+    const codeLower = asStr(form.code).toLowerCase();
+
+    const payload = {
+      code: codeLower,
+      unit_name: asStr(form.unit_name),
+      description: asStr(form.description) || null,
+      // backend รองรับทั้ง category_id/ids ถ้ามีคอลัมน์
+      category_id: ids.length ? ids[0] : null,
+      category_ids: ids,
+    };
+
+    if (!payload.code || !payload.unit_name) {
+      alert('กรอก code และ unit name ให้ครบ');
+      return;
     }
 
-    // ถ้ามี API ให้บันทึก
+    setLoading(true);
     try {
-      await api.post(path('/units'), { code, label });
-      await fetchUnits();
-    } catch (err) {
-      console.warn('ℹ️ สร้างผ่าน API ไม่ได้ → จะเพิ่มแบบ client-side ชั่วคราว');
-      setUnits(prev => [...prev, { code, label }]);
+      if (editing?.code) {
+        await updateUnitAPI(editing.code, payload);
+      } else {
+        await createUnitAPI(payload);
+      }
+      await refreshUnits();
+      setEditing(null);
+      setForm({ code: '', unit_name: '', description: '', category_ids: [] });
+    } catch (e2) {
+      console.error(e2);
+      const msg = e2?.response?.data?.message || e2?.response?.data?.error || 'บันทึกไม่สำเร็จ';
+      alert(msg);
+    } finally {
+      setLoading(false);
     }
-    setNewUnit({ code: '', label: '' });
-  };
+  }
 
-  // แก้ไข
-  const editUnit = async (u) => {
-    const name = window.prompt('ชื่อหน่วยใหม่', u.label);
-    if (!name || name.trim() === u.label) return;
-    const nextLabel = name.trim();
-    const nextCode  = nextLabel.toLowerCase().replace(/\s+/g, '_');
-
-    // กัน label ชน
-    if (units.some(x => x.code !== u.code && (x.label === nextLabel || x.code === nextCode))) {
-      return alert(`หน่วย "${nextLabel}" ชนกับที่มีอยู่`);
-    }
-
+  async function onDelete(row) {
+    const key = unitKey(row);
+    if (!key) return alert('ไม่พบรหัสหน่วยที่จะลบ');
+    if (!window.confirm(`ลบหน่วย ${row.code || row.unit_name}?`)) return;
+    setLoading(true);
     try {
-      // พยายามอัปเดตผ่าน API ก่อน (ใช้ code เดิมเป็น id)
-      await api.put(path(`/units/${u.code}`), { code: nextCode, label: nextLabel });
-      await fetchUnits();
-    } catch (err) {
-      console.warn('ℹ️ แก้ผ่าน API ไม่ได้ → ปรับ client-side ชั่วคราว');
-      setUnits(prev => prev.map(x => x.code === u.code ? { ...x, code: nextCode, label: nextLabel } : x));
+      await deleteUnitAPI(key);
+      await refreshUnits();
+    } catch (e) {
+      console.error(e);
+      alert(e?.response?.data?.message || e?.response?.data?.error || 'ลบไม่สำเร็จ');
+    } finally {
+      setLoading(false);
     }
-  };
+  }
 
-  // ลบ
-  const deleteUnit = async (u) => {
-    if (!window.confirm(`ลบหน่วย "${u.label}" ?`)) return;
+  async function onTogglePublish(row) {
+    const key = unitKey(row);
+    if (!key) return;
+    setLoading(true);
     try {
-      await api.delete(path(`/units/${u.code}`));
-      await fetchUnits();
-    } catch (err) {
-      console.warn('ℹ️ ลบผ่าน API ไม่ได้ → ลบ client-side ชั่วคราว');
-      setUnits(prev => prev.filter(x => x.code !== u.code));
+      const next = !isPublishedOn(row);
+      await updateUnitAPI(key, { is_published: next });
+      await refreshUnits();
+    } catch (e) {
+      console.error(e);
+      alert(e?.response?.data?.message || e?.response?.data?.error || 'อัปเดตสถานะเผยแพร่ไม่สำเร็จ');
+    } finally {
+      setLoading(false);
     }
-  };
-
-  // toggle publish (ถ้ารองรับ)
-  const togglePublish = async (u) => {
-    if (!supportsPublish) return;
-    const current = typeof u.is_published === 'boolean' ? u.is_published : true;
-    try {
-      await api.patch(path(`/admin/units/${u.code}/publish`), { is_published: !current });
-      await fetchUnits();
-    } catch (err) {
-      handleApiError(err, '❌ อัปเดตการแสดงผลไม่สำเร็จ');
-    }
-  };
-
-  if (loading) return <div style={{ padding: 12 }}>กำลังโหลดข้อมูล…</div>;
+  }
 
   return (
-    <div className="pm-page">
-      {/* ปุ่มกลับ */}
-      <div style={{display:'flex', gap:8, margin:'12px 0 20px', flexWrap:'wrap'}}>
-        <Link to="/admin/products" className="btn btn-ghost">← กลับไปจัดการสินค้า</Link>
+    <div className="page page-wide">
+      <div className="page-head">
+        <p><Link to="/admin">← กลับไปจัดการสินค้า</Link></p>
+        <h2>จัดการหน่วยสินค้า (จากฐานข้อมูล)</h2>
       </div>
 
-      <h2>จัดการหน่วยสินค้า</h2>
-
-      {/* ฟอร์มเพิ่ม */}
-      <div className="pm-actions mt-8" style={{ flexWrap:'wrap' }}>
-        <input
-          placeholder="code (เช่น: piece, pot)"
-          value={newUnit.code}
-          onChange={(e)=>setNewUnit(prev => ({ ...prev, code: e.target.value }))}
-          style={{ maxWidth:220 }}
-        />
-        <input
-          placeholder="label (เช่น: ชิ้น, กระถาง)"
-          value={newUnit.label}
-          onChange={(e)=>setNewUnit(prev => ({ ...prev, label: e.target.value }))}
-          style={{ minWidth:220 }}
-        />
-        <button type="button" className="btn btn-primary" onClick={createUnit}>
-          เพิ่มหน่วยสินค้า
-        </button>
-      </div>
-
-      {/* ฟิลเตอร์ (แสดงผล) — ถ้ารองรับ publish */}
-      {supportsPublish && (
-        <div className="pm-toolbar">
-          <div className="seg">
-            <button type="button" className={`seg-btn ${filter==='all' ? 'active': ''}`} onClick={()=>setFilter('all')}>ทั้งหมด</button>
-            <button type="button" className={`seg-btn ${filter==='published' ? 'active': ''}`} onClick={()=>setFilter('published')}>เฉพาะที่แสดง</button>
-            <button type="button" className={`seg-btn ${filter==='hidden' ? 'active': ''}`} onClick={()=>setFilter('hidden')}>เฉพาะที่ซ่อน</button>
-          </div>
+      {/* ───────────── Toolbar ───────────── */}
+      <div className="card" style={{ marginBottom: 12, padding: 12 }}>
+        <div className="toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            className="search"
+            placeholder="ค้นหา: code / unit_name / description"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            style={{ flex: 1, minWidth: 240 }}
+          />
+          <label className="chk" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={onlyVisible}
+              onChange={(e) => setOnlyVisible(e.target.checked)}
+            />
+            เฉพาะที่แสดงผล (visible)
+          </label>
+          <button onClick={refreshUnits} disabled={loading}>รีเฟรช</button>
+          <button className="btn-primary" onClick={startCreate} disabled={loading}>+ เพิ่มหน่วย</button>
         </div>
-      )}
+      </div>
 
-      {/* ตาราง */}
-      <div className="pm-table-wrap mt-8">
-        <table className="pm-table pm-fixed">
-          <thead>
-            <tr>
-              <th style={{width:220}}>รหัส (code)</th>
-              <th>ชื่อหน่วย (label)</th>
-              <th style={{textAlign:'center', width: supportsPublish ? 260 : 200}}>จัดการ</th>
-              {supportsPublish && <th style={{textAlign:'center', width:140}}>แสดงผล</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {(filteredUnits || units).map(u => {
-              const published = typeof u.is_published === 'boolean' ? u.is_published : true;
-              return (
-                <tr key={u.code}>
-                  <td>{u.code}</td>
-                  <td>
-                    {supportsPublish && (
-                      <span className={`pill ${published ? 'on' : 'off'}`} style={{ marginRight: 6 }}>
-                        {published ? 'กำลังแสดง' : 'ถูกซ่อน'}
+      {/* ───────────── Form ───────────── */}
+      <form ref={formWrapRef} className="card unit-form-card" onSubmit={doSubmit} autoComplete="off">
+        <div className="form-row">
+          <label>code (เช่น: piece, pot) [a-z]</label>
+          <input
+            value={form.code}
+            onChange={e => setField('code', e.target.value)}
+            placeholder="เช่น pot, bag, kg"
+            disabled={!!editing?.code} /* กำลังแก้ไข ห้ามแก้ code เพื่อลดปัญหา duplicate */
+          />
+        </div>
+
+        <div className="form-row">
+          <label>unit name (เช่น: ชิ้น, กระถาง)</label>
+          <input
+            ref={unitNameInputRef}
+            value={form.unit_name}
+            onChange={e => setField('unit_name', e.target.value)}
+            placeholder="ชื่อหน่วย"
+          />
+        </div>
+
+        <div className="form-row">
+          <label>หมวด (กดเลือกได้หลายค่า)</label>
+          <MultiToggle
+            options={categories}
+            value={form.category_ids}
+            onChange={(ids) => setField('category_ids', ids)}
+          />
+          <small className="hint">กดปุ่มเพื่อเลือก/ยกเลิก (หลายค่าได้)</small>
+        </div>
+
+        <div className="form-row">
+          <label>description (ถ้ามี)</label>
+          <textarea
+            value={form.description}
+            onChange={e => setField('description', e.target.value)}
+            placeholder="บันทึกเพิ่มเติม"
+            rows={2}
+          />
+        </div>
+
+        <div className="actions">
+          <button type="submit" className="btn-primary" disabled={loading}>
+            {editing ? 'บันทึกการแก้ไข' : 'เพิ่มหน่วยสินค้า'}
+          </button>
+          {editing && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => { setEditing(null); setForm({ code: '', unit_name: '', description: '', category_ids: [] }); }}
+              disabled={loading}
+            >
+              ยกเลิกแก้ไข
+            </button>
+          )}
+        </div>
+      </form>
+
+      {/* ───────────── Units Table ───────────── */}
+      <div className="table card">
+        <div className="table-scroll">
+          <table className="tbl-units">
+            <colgroup>
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '30%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '18%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="txt-left">code</th>
+                <th className="txt-left">unit_name</th>
+                <th className="txt-left">category_ids</th>
+                <th className="txt-left">สถานะ</th>
+                <th className="txt-right">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((u) => {
+                const ids = extractCategoryIds(u);
+                const on = isPublishedOn(u);
+                const key = unitKey(u);
+                return (
+                  <tr key={key || u.code}>
+                    <td className="mono">{u.code || '-'}</td>
+                    <td className="wrap">{u.unit_name || '-'}</td>
+                    <td>
+                      {ids.length ? (
+                        <div className="badges">
+                          {ids.map((id) => (
+                            <span className="badge" key={id}>{id}</span>
+                          ))}
+                        </div>
+                      ) : <span className="muted">-</span>}
+                    </td>
+                    <td>
+                      <span className={on ? 'badge on' : 'badge off'}>
+                        {on ? 'เผยแพร่' : 'ถูกซ่อน'}
                       </span>
-                    )}
-                    <span className="name-with-badges">{u.label}</span>
-                  </td>
-                  <td className="cell-actions">
-                    <button className="btn btn-ghost" onClick={()=>editUnit(u)}>แก้ไข</button>
-                    <button className="btn btn-danger" onClick={()=>deleteUnit(u)}>ลบ</button>
-                  </td>
-                  {supportsPublish && (
-                    <td className="cell-actions" style={{ textAlign:'center' }}>
-                      <button
-                        className={`btn ${published ? 'btn-warn' : 'btn-primary'}`}
-                        onClick={() => togglePublish(u)}
-                        title={published ? 'ซ่อน' : 'แสดง'}
-                      >
-                        {published ? 'ไม่แสดง' : 'แสดง'}
+                    </td>
+                    <td className="actions-cell">
+                      <button className="btn-chip" onClick={() => startEdit(u)}>แก้ไข</button>
+                      <button className="btn-chip danger" onClick={() => onDelete(u)}>ลบ</button>
+                      <button className={on ? 'btn-chip muted' : 'btn-chip primary'} onClick={() => onTogglePublish(u)}>
+                        {on ? 'ซ่อน' : 'เผยแพร่'}
                       </button>
                     </td>
-                  )}
+                  </tr>
+                );
+              })}
+              {!rows.length && (
+                <tr>
+                  <td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>
+                    ไม่พบข้อมูล
+                  </td>
                 </tr>
-              );
-            })}
-            {(!units || units.length === 0) && (
-              <tr><td colSpan={supportsPublish ? 4 : 3} style={{ color:'#777' }}>— ไม่มีหน่วย —</td></tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

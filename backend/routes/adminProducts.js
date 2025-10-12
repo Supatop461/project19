@@ -1,8 +1,9 @@
 // backend/routes/adminProducts.js
 // ✅ Products CRUD + Archive/Unarchive + Images
-// ✅ Validation โมดูล 2: product_name, category_id (TEXT), price>=0, stock>=0, product_unit_id ต้องมี
-// ✅ รองรับ published (ถ้าตารางมีคอลัมน์นี้) + publish/unpublish
-// ✅ ไม่แก้ schema — ตรวจคอลัมน์แบบไดนามิกก่อนใช้
+// ✅ Validation: product_name, category_id(TEXT), price>=0, product_unit_id ต้องมี
+// ✅ Published รองรับทั้ง is_published / published (ตรวจแบบไดนามิก)
+// ✅ สต๊อกดึงจาก v_product_variants_live_stock (รวมเป็น stock ต่อสินค้า) ถ้าไม่มีวิวจะให้ 0
+// ✅ ไม่ล็อก schema ตายตัว — ตรวจตาราง/คอลัมน์ก่อนใช้เสมอ
 
 const express = require('express');
 const router = express.Router();
@@ -27,28 +28,17 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-const SORT_WHITELIST = new Set([
-  'product_id', 'product_name', 'selling_price', 'stock_quantity', 'created_at'
-]);
-
-/* ---------- No-cache middleware (อัปเดตเฉพาะบล็อกนี้) ---------- */
+/* ---------- No-cache middleware ---------- */
 const nocache = (_req, res, next) => {
-  // กัน cache ทุกชั้น
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0, private');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
-
-  // ป้องกัน 304 จาก ETag/If-None-Match: ให้ ETag ไม่คงที่
-  // (ใช้ค่าสุ่มสั้น ๆ ต่างกันทุกครั้ง)
   res.set('ETag', Math.random().toString(36).slice(2));
-
-  // ป้องกัน 304 จาก If-Modified-Since: อัปเดตให้เป็นเวลาตอนนี้เสมอ
   res.set('Last-Modified', new Date().toUTCString());
-
   next();
 };
 
-/* ---------- Column/Schema helpers ---------- */
+/* ---------- Schema helpers ---------- */
 async function hasTable(table) {
   const { rows } = await db.query(`SELECT to_regclass($1) IS NOT NULL AS ok`, [`public.${table}`]);
   return !!rows[0]?.ok;
@@ -61,6 +51,14 @@ async function hasColumn(table, col) {
     LIMIT 1
   `, [table, col]);
   return rows.length > 0;
+}
+// เลือกคีย์จริงของ product_units / size_units แบบไดนามิก
+async function getUnitKeys() {
+  const puKey = (await hasColumn('product_units', 'unit_id')) ? 'unit_id'
+               : (await hasColumn('product_units', 'id')) ? 'id' : null;
+  const suKey = (await hasColumn('size_units', 'size_unit_id')) ? 'size_unit_id'
+               : (await hasColumn('size_units', 'id')) ? 'id' : null;
+  return { puKey, suKey };
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -80,17 +78,29 @@ router.get('/', nocache, async (req, res)  => {
       page_size = '20',
     } = req.query;
 
-    const hasIsArchived  = await hasColumn('products', 'is_archived');
-    const hasArchivedAt  = await hasColumn('products', 'archived_at');
-    const hasImageUrl    = await hasColumn('products', 'image_url');
-    const hasPublished   = await hasColumn('products', 'published');
-    const hasPU          = await hasColumn('products', 'product_unit_id');
-    const hasSU          = await hasColumn('products', 'size_unit_id');
-    const useView        = await hasTable('v_product_variants_live_stock');
+    const hasIsArchived   = await hasColumn('products', 'is_archived');
+    const hasArchivedAt   = await hasColumn('products', 'archived_at');
+    const hasImageUrl     = await hasColumn('products', 'image_url');
+
+    const hasIsPublished  = await hasColumn('products', 'is_published');
+    const hasPublished    = await hasColumn('products', 'published');
+
+    const hasPU           = await hasColumn('products', 'product_unit_id');
+    const hasSU           = await hasColumn('products', 'size_unit_id');
+    const hasPrice        = await hasColumn('products', 'price');
+
+    const useView         = await hasTable('v_product_variants_live_stock');
+    const { puKey, suKey } = await getUnitKeys();
 
     const selImageUrl   = hasImageUrl ? 'p.image_url' : 'cv.cover_url AS image_url';
-    const selPublished  = hasPublished ? 'p.published' : 'TRUE AS published';
-    const selIsArchived = hasIsArchived ? 'COALESCE(p.is_archived,false) AS is_archived' : 'NULL::boolean AS is_archived';
+    const selPrice      = hasPrice ? 'p.price::numeric' : 'NULL::numeric AS price';
+
+    // คอลัมน์ published (เลือกอันที่มี)
+    const selPublished  = hasIsPublished
+      ? 'COALESCE(p.is_published, TRUE) AS is_published'
+      : (hasPublished ? 'COALESCE(p.published, TRUE) AS is_published' : 'TRUE AS is_published');
+
+    const selIsArchived = hasIsArchived ? 'COALESCE(p.is_archived,false) AS is_archived' : 'FALSE AS is_archived';
     const selArchivedAt = hasArchivedAt ? 'p.archived_at' : 'NULL::timestamp AS archived_at';
     const selPU         = hasPU ? 'p.product_unit_id' : 'NULL::int AS product_unit_id';
     const selSU         = hasSU ? 'p.size_unit_id'    : 'NULL::int AS size_unit_id';
@@ -104,7 +114,6 @@ router.get('/', nocache, async (req, res)  => {
       where.push(`(p.product_name ILIKE $${params.length - 1} OR p.description ILIKE $${params.length})`);
     }
 
-    // 🔁 TEXT matching for category_id / subcategory_id
     if (category_id && String(category_id).trim() !== '') {
       params.push(String(category_id).trim());
       where.push(`p.category_id = $${params.length}`);
@@ -120,16 +129,19 @@ router.get('/', nocache, async (req, res)  => {
       else if (hasArchivedAt) where.push(`p.archived_at IS NULL`);
     }
 
-    if (hasPublished && published !== undefined && String(published).trim() !== '') {
+    // ฟิลเตอร์ published ถ้าผู้ใช้ส่งมา และมีคอลัมน์
+    if (published !== undefined && String(published).trim() !== '') {
       const val = ['1','true','yes','y'].includes(String(published).toLowerCase());
-      where.push(`COALESCE(p.published, TRUE) = ${val ? 'TRUE' : 'FALSE'}`);
+      if (hasIsPublished) where.push(`COALESCE(p.is_published, TRUE) = ${val ? 'TRUE' : 'FALSE'}`);
+      else if (hasPublished) where.push(`COALESCE(p.published, TRUE) = ${val ? 'TRUE' : 'FALSE'}`);
     }
 
-    const sb = SORT_WHITELIST.has(String(sort_by)) ? String(sort_by) : 'product_id';
+    const sbWhitelist = new Set(['product_id','product_name','price','created_at']);
+    const sb = sbWhitelist.has(String(sort_by)) ? String(sort_by) : 'product_id';
     const sd = String(sort_dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     const orderSql = `ORDER BY p.${sb} ${sd}`;
 
-    const pInt = Math.max(parseInt(page, 10) || 1, 1);
+    const pInt  = Math.max(parseInt(page, 10) || 1, 1);
     const psInt = Math.min(Math.max(parseInt(page_size, 10) || 20, 1), 100);
     const offset = (pInt - 1) * psInt;
 
@@ -147,9 +159,7 @@ router.get('/', nocache, async (req, res)  => {
         p.product_id,
         p.product_name,
         p.description,
-        p.selling_price,
-        p.cost_price,
-        p.stock_quantity,
+        ${selPrice},
         p.category_id,
         p.subcategory_id,
         ${selImageUrl},
@@ -170,8 +180,8 @@ router.get('/', nocache, async (req, res)  => {
         sc.subcategory_name,
         ps.status_name     AS product_status_name,
 
-        COALESCE(lv.live_stock,0)::int AS live_stock,
-        ${useView ? 'COALESCE(lv.min_price, p.selling_price)::numeric' : 'p.selling_price::numeric'} AS min_price,
+        COALESCE(lv.stock,0)::int AS stock,
+        COALESCE(lv.min_price, ${hasPrice ? 'p.price' : 'NULL'})::numeric AS min_price,
 
         COUNT(*) OVER() AS __total
       FROM base p
@@ -183,19 +193,20 @@ router.get('/', nocache, async (req, res)  => {
         ) cv ON TRUE
       `}
       LEFT JOIN product_categories c ON c.category_id = p.category_id
-      LEFT JOIN subcategories sc     ON sc.subcategory_id = p.subcategory_id
-      LEFT JOIN product_statuses ps  ON ps.product_status_id = p.product_status_id
-      LEFT JOIN product_units pu     ON pu.id = p.product_unit_id
-      LEFT JOIN size_units    su     ON su.id = p.size_unit_id
+      LEFT JOIN subcategories      sc ON sc.subcategory_id = p.subcategory_id
+      LEFT JOIN product_statuses   ps ON ps.product_status_id = p.product_status_id
+      ${puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : ''}
+      ${suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : ''}
+
       ${useView ? `
         LEFT JOIN LATERAL (
           SELECT
-            COALESCE(SUM(v.stock),0)::int AS live_stock,
-            MIN(v.price_override) AS min_price
+            COALESCE(SUM(v.stock),0)::int AS stock,
+            MIN(v.price_override)          AS min_price
           FROM v_product_variants_live_stock v
           WHERE v.product_id = p.product_id
         ) lv ON TRUE
-      ` : ''}
+      ` : 'LEFT JOIN LATERAL (SELECT 0::int AS stock, NULL::numeric AS min_price) lv ON TRUE'}
       ${orderSql}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `;
@@ -218,39 +229,37 @@ router.get('/:id', nocache, async (req, res) => {
     const id = toInt(req.params.id);
     if (id == null) return res.status(400).json({ error: 'Invalid id' });
 
-    const { rows } = await db.query(
-      `
+    const { puKey, suKey } = await getUnitKeys();
+    const hasPrice = await hasColumn('products', 'price');
+
+    const { rows } = await db.query(`
       SELECT 
         p.*,
+        ${hasPrice ? 'p.price::numeric AS price' : 'NULL::numeric AS price'},
         pu.unit_name AS product_unit_name,
         su.unit_name AS size_unit_name,
         c.category_name,
         sc.subcategory_name,
         ps.status_name AS product_status_name
       FROM products p
-      LEFT JOIN product_categories c   ON c.category_id = p.category_id
-      LEFT JOIN subcategories sc       ON sc.subcategory_id = p.subcategory_id
-      LEFT JOIN product_statuses ps    ON ps.product_status_id = p.product_status_id
-      LEFT JOIN product_units pu       ON pu.id = p.product_unit_id
-      LEFT JOIN size_units su          ON su.id = p.size_unit_id
+      LEFT JOIN product_categories c ON c.category_id = p.category_id
+      LEFT JOIN subcategories      sc ON sc.subcategory_id = p.subcategory_id
+      LEFT JOIN product_statuses   ps ON ps.product_status_id = p.product_status_id
+      ${puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : ''}
+      ${suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : ''}
       WHERE p.product_id = $1
-      `,
-      [id]
-    );
+    `, [id]);
+
     if (!rows.length) return res.status(404).json({ error: 'ไม่พบสินค้า' });
 
     const product = rows[0];
 
-    const imgsQ = await db.query(
-      `
-      SELECT
-        id, url, alt_text, is_primary, position, variant_id, created_at
+    const imgsQ = await db.query(`
+      SELECT id, url, alt_text, is_primary, position, variant_id, created_at
       FROM product_images
       WHERE product_id = $1
       ORDER BY is_primary DESC, position ASC, id ASC
-      `,
-      [id]
-    );
+    `, [id]);
     const images = imgsQ.rows;
 
     product.images = images;
@@ -264,11 +273,9 @@ router.get('/:id', nocache, async (req, res) => {
     const useView = await hasTable('v_product_variants_live_stock');
     let variants = [];
     if (useView) {
-      const hasFinal = await hasColumn('v_product_variants_live_stock', 'final_price');
-      const priceExpr = hasFinal ? 'COALESCE(final_price, price_override)' : 'price_override';
       const vq = await db.query(`
         SELECT variant_id, product_id, sku,
-               ${priceExpr} AS price,
+               price_override AS price,
                COALESCE(stock,0)::int AS stock
         FROM v_product_variants_live_stock
         WHERE product_id = $1
@@ -280,7 +287,7 @@ router.get('/:id', nocache, async (req, res) => {
         const p = r.price == null ? null : Number(r.price);
         return (p == null) ? min : (min == null ? p : Math.min(min, p));
       }, null);
-      if (product.min_price == null) product.min_price = product.selling_price;
+      if (product.min_price == null) product.min_price = product.price ?? null;
     } else {
       const vq = await db.query(`
         SELECT variant_id, product_id, sku, NULL::numeric AS price, 0::int AS stock
@@ -290,7 +297,7 @@ router.get('/:id', nocache, async (req, res) => {
       `, [id]);
       variants = vq.rows;
       product.live_stock = 0;
-      product.min_price = product.selling_price;
+      product.min_price = product.price ?? null;
     }
 
     product.variants = variants;
@@ -310,9 +317,7 @@ router.post('/', async (req, res) => {
     let {
       product_name, productName,
       description,
-      selling_price,  sellingPrice,
-      cost_price,     costPrice,
-      stock_quantity, stockQuantity,
+      price,           // ✅ ใหม่
       category_id,    categoryId,
       subcategory_id, subcategoryId,
 
@@ -323,13 +328,11 @@ router.post('/', async (req, res) => {
       origin,
       product_status_id, productStatusId,
 
-      published
+      is_published,    // แบบที่ 1
+      published        // แบบที่ 2
     } = req.body;
 
     product_name      = product_name ?? productName;
-    selling_price     = selling_price ?? sellingPrice;
-    cost_price        = cost_price ?? costPrice;
-    stock_quantity    = stock_quantity ?? stockQuantity;
     category_id       = category_id ?? categoryId;
     subcategory_id    = subcategory_id ?? subcategoryId;
     product_status_id = product_status_id ?? productStatusId;
@@ -338,68 +341,65 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'กรุณาระบุชื่อสินค้า (product_name)' });
     }
 
-    const sp = toNum(selling_price) ?? 0;
-    const cp = toNum(cost_price) ?? 0;
-    const sq = toInt(stock_quantity) ?? 0;
-    const catId = category_id == null ? '' : String(category_id).trim();
-
-    if (!catId) {
-      return res.status(400).json({ message: 'กรุณาเลือกหมวดหมู่ (category_id)' });
+    const pr = toNum(price);
+    if (pr == null || Number(pr) < 0) {
+      return res.status(400).json({ message: 'price ต้องเป็นตัวเลข ≥ 0' });
     }
-    if (sp < 0) return res.status(400).json({ message: 'selling_price ต้อง ≥ 0' });
-    if (cp < 0) return res.status(400).json({ message: 'cost_price ต้อง ≥ 0' });
-    if (!Number.isInteger(sq) || sq < 0) return res.status(400).json({ message: 'stock_quantity ต้องเป็นจำนวนเต็ม ≥ 0' });
 
-    // subcategory เป็น TEXT ด้วย (ถ้ามี)
-    const subId = (subcategory_id == null || String(subcategory_id).trim()==='') ? null : String(subcategory_id).trim();
+    const catId = category_id == null ? '' : String(category_id).trim();
+    if (!catId) return res.status(400).json({ message: 'กรุณาเลือกหมวดหมู่ (category_id)' });
 
     const unitId = toInt(product_unit_id);
-    if (unitId == null) {
-      return res.status(400).json({ message: 'กรุณาเลือกหน่วยสินค้า (product_unit_id)' });
-    }
+    if (unitId == null) return res.status(400).json({ message: 'กรุณาเลือกหน่วยสินค้า (product_unit_id)' });
+
+    const subId = (subcategory_id == null || String(subcategory_id).trim()==='') ? null : String(subcategory_id).trim();
 
     let sizeUnitId = null;
     let sizeVal = null;
     if (size_unit_id !== undefined || size_value !== undefined) {
       sizeUnitId = size_unit_id == null ? null : toInt(size_unit_id);
       sizeVal    = size_value == null ? null : toNum(size_value);
-      if (sizeVal != null && sizeUnitId == null) {
-        return res.status(400).json({ message: 'มี size_value ต้องกำหนด size_unit_id' });
-      }
-      if (sizeVal == null && sizeUnitId != null) {
-        return res.status(400).json({ message: 'มี size_unit_id ต้องกำหนด size_value' });
-      }
+      if (sizeVal != null && sizeUnitId == null) return res.status(400).json({ message: 'มี size_value ต้องกำหนด size_unit_id' });
+      if (sizeVal == null && sizeUnitId != null) return res.status(400).json({ message: 'มี size_unit_id ต้องกำหนด size_value' });
     }
 
-    const hasPublished = await hasColumn('products', 'published');
+    const hasIsPublished = await hasColumn('products', 'is_published');
+    const hasPublished   = await hasColumn('products', 'published');
 
-    const insertSql = `
-      INSERT INTO products (
-        product_name, description, selling_price, cost_price, stock_quantity,
-        category_id, subcategory_id,
-        product_unit_id, size_unit_id, size_value,
-        origin, product_status_id
-        ${hasPublished ? ', published' : ''}
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12${hasPublished ? ',$13' : ''})
-      RETURNING product_id
-    `;
-
+    const cols = [
+      'product_name', 'description', 'price',
+      'category_id', 'subcategory_id', 'product_unit_id', 'size_unit_id', 'size_value',
+      'origin', 'product_status_id'
+    ];
     const vals = [
       String(product_name).trim(),
       description || '',
-      sp, cp, sq,
-      catId, subId,
-      unitId, sizeUnitId, sizeVal,
+      pr,
+      catId, subId, unitId, sizeUnitId, sizeVal,
       origin || '',
       product_status_id || null
     ];
-    if (hasPublished) vals.push(published === undefined ? true : !!published);
+
+    if (hasIsPublished) {
+      cols.push('is_published');
+      vals.push(is_published === undefined ? true : !!is_published);
+    } else if (hasPublished) {
+      cols.push('published');
+      vals.push(published === undefined ? true : !!published);
+    }
+
+    const placeholders = cols.map((_, i) => `$${i+1}`).join(',');
+    const insertSql = `
+      INSERT INTO products (${cols.join(',')})
+      VALUES (${placeholders})
+      RETURNING product_id
+    `;
 
     const inserted = await db.query(insertSql, vals);
     const newId = inserted.rows[0].product_id;
 
-    const { rows } = await db.query(
-      `
+    const { puKey, suKey } = await getUnitKeys();
+    const { rows } = await db.query(`
       SELECT 
         p.*,
         pu.unit_name AS product_unit_name,
@@ -408,15 +408,13 @@ router.post('/', async (req, res) => {
         sc.subcategory_name,
         ps.status_name AS product_status_name
       FROM products p
-      LEFT JOIN product_categories c   ON c.category_id = p.category_id
-      LEFT JOIN subcategories sc       ON sc.subcategory_id = p.subcategory_id
-      LEFT JOIN product_statuses ps    ON ps.product_status_id = p.product_status_id
-      LEFT JOIN product_units pu       ON pu.id = p.product_unit_id
-      LEFT JOIN size_units su          ON su.id = p.size_unit_id
+      LEFT JOIN product_categories c ON c.category_id = p.category_id
+      LEFT JOIN subcategories      sc ON sc.subcategory_id = p.subcategory_id
+      LEFT JOIN product_statuses   ps ON ps.product_status_id = p.product_status_id
+      ${puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : ''}
+      ${suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : ''}
       WHERE p.product_id = $1
-      `,
-      [newId]
-    );
+    `, [newId]);
 
     res.status(201).json(rows[0]);
   } catch (error) {
@@ -430,7 +428,7 @@ router.post('/', async (req, res) => {
 });
 
 /* ──────────────────────────────────────────────────────────────
- * PUT /api/admin/products/:id  (category_id/subcategory_id = TEXT)
+ * PUT /api/admin/products/:id
  * ──────────────────────────────────────────────────────────── */
 router.put('/:id', async (req, res) => {
   try {
@@ -443,9 +441,7 @@ router.put('/:id', async (req, res) => {
     let {
       product_name, productName,
       description,
-      selling_price,  sellingPrice,
-      cost_price,     costPrice,
-      stock_quantity, stockQuantity,
+      price,
       category_id,    categoryId,
       subcategory_id, subcategoryId,
 
@@ -456,51 +452,40 @@ router.put('/:id', async (req, res) => {
       origin,
       product_status_id, productStatusId,
 
+      is_published,
       published
     } = req.body;
 
     product_name      = product_name ?? productName;
-    selling_price     = selling_price ?? sellingPrice;
-    cost_price        = cost_price ?? costPrice;
-    stock_quantity    = stock_quantity ?? stockQuantity;
     category_id       = category_id ?? categoryId;
     subcategory_id    = subcategory_id ?? subcategoryId;
     product_status_id = product_status_id ?? productStatusId;
 
     const fields = [];
     const params = [];
-
     const push = (col, val) => { params.push(val); fields.push(`${col} = $${params.length}`); };
-    const pushNumGE0 = (col, val, isInt = false) => {
-      if (val === undefined) return;
-      const n = isInt ? toInt(val) : toNum(val);
-      if (n == null) return push(col, null);
-      if (isInt && !Number.isInteger(n)) throw new Error(`${col} ต้องเป็นจำนวนเต็ม`);
-      if (Number(n) < 0) throw new Error(`${col} ต้อง ≥ 0`);
-      push(col, n);
-    };
 
     if (product_name !== undefined) push('product_name', String(product_name).trim());
     if (description  !== undefined) push('description', description);
-    pushNumGE0('selling_price', selling_price);
-    pushNumGE0('cost_price',    cost_price);
-    pushNumGE0('stock_quantity', stock_quantity, true);
 
-    // 🔁 TEXT
+    if (price !== undefined) {
+      const pr = toNum(price);
+      if (pr == null || Number(pr) < 0) return res.status(400).json({ message: 'price ต้องเป็นตัวเลข ≥ 0' });
+      push('price', pr);
+    }
+
     if (category_id    !== undefined) push('category_id', category_id == null ? null : String(category_id).trim());
     if (subcategory_id !== undefined) push('subcategory_id', subcategory_id == null ? null : String(subcategory_id).trim());
 
-    if (origin         !== undefined) push('origin', origin);
+    if (origin            !== undefined) push('origin', origin);
     if (product_status_id !== undefined) push('product_status_id', product_status_id);
 
-    // product_unit_id (เลข)
     if (product_unit_id !== undefined) {
       const unitId = toInt(product_unit_id);
       if (unitId == null) return res.status(400).json({ message: 'กรุณาเลือกหน่วยสินค้า (product_unit_id)' });
       push('product_unit_id', unitId);
     }
 
-    // size pair
     if (size_unit_id !== undefined || size_value !== undefined) {
       const sUid = size_unit_id == null ? null : toInt(size_unit_id);
       const sVal = size_value == null ? null : toNum(size_value);
@@ -510,8 +495,11 @@ router.put('/:id', async (req, res) => {
       push('size_value', sVal);
     }
 
-    const hasPublished = await hasColumn('products', 'published');
-    if (hasPublished && published !== undefined) {
+    const hasIsPublished = await hasColumn('products', 'is_published');
+    const hasPublished   = await hasColumn('products', 'published');
+    if (hasIsPublished && is_published !== undefined) {
+      push('is_published', !!is_published);
+    } else if (hasPublished && published !== undefined) {
       push('published', !!published);
     }
 
@@ -528,8 +516,8 @@ router.put('/:id', async (req, res) => {
     `;
     await db.query(updateSql, params);
 
-    const { rows } = await db.query(
-      `
+    const { puKey, suKey } = await getUnitKeys();
+    const { rows } = await db.query(`
       SELECT 
         p.*,
         pu.unit_name AS product_unit_name,
@@ -538,22 +526,16 @@ router.put('/:id', async (req, res) => {
         sc.subcategory_name,
         ps.status_name AS product_status_name
       FROM products p
-      LEFT JOIN product_categories c   ON c.category_id = p.category_id
-      LEFT JOIN subcategories sc       ON sc.subcategory_id = p.subcategory_id
-      LEFT JOIN product_statuses ps    ON ps.product_status_id = p.product_status_id
-      LEFT JOIN product_units pu       ON pu.id = p.product_unit_id
-      LEFT JOIN size_units su          ON su.id = p.size_unit_id
+      LEFT JOIN product_categories c ON c.category_id = p.category_id
+      LEFT JOIN subcategories      sc ON sc.subcategory_id = p.subcategory_id
+      LEFT JOIN product_statuses   ps ON ps.product_status_id = p.product_status_id
+      ${puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : ''}
+      ${suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : ''}
       WHERE p.product_id = $1
-      `,
-      [id]
-    );
+    `, [id]);
 
     res.json(rows[0]);
   } catch (error) {
-    const msg = String(error.message || '');
-    if (msg.includes('≥ 0') || msg.includes('จำนวนเต็ม') || msg.startsWith('กรุณา')) {
-      return res.status(400).json({ message: msg });
-    }
     console.error('❌ ERROR: อัปเดตสินค้าไม่สำเร็จ:', error);
     res.status(500).json({ message: 'ผิดพลาดในระบบ' });
   }
@@ -646,32 +628,73 @@ router.patch('/:id/unarchive', async (req, res) => {
 });
 
 /* ──────────────────────────────────────────────────────────────
- * PUBLISH / UNPUBLISH (ถ้ามีคอลัมน์ published)
+ * PUBLISH / UNPUBLISH (รองรับทั้ง is_published / published)
+ *  - ถ้า body มี is_published(boolean) → เซ็ตตามนั้น
+ *  - ถ้าไม่ส่ง → toggle ค่าเดิม (NOT COALESCE(col, TRUE))
  * ──────────────────────────────────────────────────────────── */
 router.patch('/:id/publish', async (req, res) => {
   try {
     const id = toInt(req.params.id);
     if (id == null) return res.status(400).json({ message: 'Invalid id' });
-    const hasPub = await hasColumn('products', 'published');
-    if (!hasPub) return res.status(400).json({ message: 'published column not found' });
-    await db.query(`UPDATE products SET published = TRUE WHERE product_id = $1`, [id]);
-    res.json({ ok: true, published: true });
+
+    const hasIsPublished = await hasColumn('products', 'is_published');
+    const hasPublished   = await hasColumn('products', 'published');
+    if (!hasIsPublished && !hasPublished) {
+      return res.status(400).json({ message: 'published column not found' });
+    }
+    const col = hasIsPublished ? 'is_published' : 'published';
+
+    const desired = req.body?.is_published; // true/false หรือ undefined
+    let rows;
+
+    if (typeof desired === 'boolean') {
+      const r = await db.query(
+        `UPDATE products SET ${col} = $2 WHERE product_id = $1 RETURNING ${col} AS is_published`,
+        [id, desired]
+      );
+      rows = r.rows;
+    } else {
+      const r = await db.query(
+        `UPDATE products
+         SET ${col} = NOT COALESCE(${col}, TRUE)
+         WHERE product_id = $1
+         RETURNING ${col} AS is_published`,
+        [id]
+      );
+      rows = r.rows;
+    }
+
+    if (!rows || !rows.length) return res.status(404).json({ message: 'ไม่พบสินค้า' });
+    return res.json({ ok: true, product_id: id, is_published: rows[0].is_published });
   } catch (e) {
     console.error('❌ publish error:', e);
-    res.status(500).json({ message: 'Publish error' });
+    return res.status(500).json({ message: 'Publish error' });
   }
 });
+
+// (คง unpublish แยกไว้ เผื่อ client เก่าเรียกอยู่)
 router.patch('/:id/unpublish', async (req, res) => {
   try {
     const id = toInt(req.params.id);
     if (id == null) return res.status(400).json({ message: 'Invalid id' });
-    const hasPub = await hasColumn('products', 'published');
-    if (!hasPub) return res.status(400).json({ message: 'published column not found' });
-    await db.query(`UPDATE products SET published = FALSE WHERE product_id = $1`, [id]);
-    res.json({ ok: true, published: false });
+
+    const hasIsPublished = await hasColumn('products', 'is_published');
+    const hasPublished   = await hasColumn('products', 'published');
+    if (!hasIsPublished && !hasPublished) {
+      return res.status(400).json({ message: 'published column not found' });
+    }
+    const col = hasIsPublished ? 'is_published' : 'published';
+
+    const { rows } = await db.query(
+      `UPDATE products SET ${col} = FALSE WHERE product_id = $1 RETURNING ${col} AS is_published`,
+      [id]
+    );
+    if (!rows || !rows.length) return res.status(404).json({ message: 'ไม่พบสินค้า' });
+
+    return res.json({ ok: true, product_id: id, is_published: rows[0].is_published });
   } catch (e) {
     console.error('❌ unpublish error:', e);
-    res.status(500).json({ message: 'Unpublish error' });
+    return res.status(500).json({ message: 'Unpublish error' });
   }
 });
 

@@ -1,72 +1,104 @@
 // [FRONTEND] src/admin/AdminSizes.js
-// ✅ จัดการ "หน่วยขนาด" แยกหน้า
-// - ลิสต์/เพิ่ม/แก้ไข/ลบ หน่วยขนาด (code + label)
-// - ถ้า backend รองรับ publish toggle → ใช้งานได้ (fallback เป็นไม่แสดงปุ่ม)
-// - พยายามโหลดจาก /size-units (หรือ /sizes ถ้าคนละชื่อ) ถ้าไม่มี → ใช้ค่า default
-// - ปุ่มกลับไปหน้าสินค้า
+// ✅ ใช้ข้อมูลจากฐานข้อมูลจริง 100% (ไม่ใช้ default)
+// ✅ คอลัมน์ที่บันทึก: code, unit_name, description, is_published
+// ✅ รองรับ endpoint ทั้ง /size-units และ /sizes
+// ✅ มีฟอร์มเพิ่ม code / ชื่อหน่วย / คำอธิบาย (กันค่า NULL)
+// ✅ มีปุ่ม แก้ไข / ลบ / แสดง-ไม่แสดง (publish toggle)
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import './ProductManagement.css';
+import './admin-sizes.css';
 import { api, path } from '../lib/api';
 
-const DEFAULT_SIZE_UNITS = [
-  { code: 'mm',   label: 'มม.' },
-  { code: 'cm',   label: 'ซม.' },
-  { code: 'm',    label: 'ม.' },
-  { code: 'inch', label: 'นิ้ว' },
-  { code: 'kg',   label: 'กก.' },
-  { code: 'ltr',  label: 'ลิตร' },
-];
-
-const asStr = (v) => (v === null || v === undefined) ? '' : String(v);
+const asStr = (v) => (v === null || v === undefined ? '' : String(v));
 
 export default function AdminSizes() {
-  const [units, setUnits]                 = useState(DEFAULT_SIZE_UNITS);
-  const [loading, setLoading]             = useState(false);
-  const [filter, setFilter]               = useState('all'); // all | published | hidden
+  const [units, setUnits] = useState([]); // ดึงจาก DB เท่านั้น
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState('all'); // all | published | hidden
   const [supportsPublish, setSupportsPublish] = useState(false);
 
-  const [newUnit, setNewUnit] = useState({ code: '', label: '' });
+  // ฟอร์มเพิ่ม
+  const [newUnit, setNewUnit] = useState({
+    code: '',
+    unit_name: '',
+    description: '',
+  });
 
   const handleApiError = (err, fallback = 'เกิดข้อผิดพลาด') => {
     console.error(fallback, err?.response?.data || err?.message || err);
     alert(err?.response?.data?.error || err?.message || fallback);
   };
 
-  // โหลดจาก /size-units หรือ /sizes (เผื่อชื่อ endpoint ต่างกัน)
+  /* ---------- ดึงรายการจาก /size-units หรือ /sizes ---------- */
   const fetchUnits = async () => {
-    const normalize = (list) => (list || []).map(u => ({
-      code:  asStr(u.code ?? u.size_code ?? u.id ?? u.SizeCode ?? ''),
-      label: asStr(u.label ?? u.name ?? u.SizeName ?? ''),
-      is_published: typeof u.is_published === 'boolean' ? u.is_published
-                    : (u.status === 'published' || u.published === true || u.IsPublished === true) || undefined
-    })).filter(u => u.code && u.label);
+    const normalize = (list) =>
+      (list || [])
+        .map((u) => {
+          const code = asStr(
+            u.code ??
+              u.size_code ??
+              u.Code ??
+              u.SizeCode ??
+              u.id ??
+              u.ID ??
+              ''
+          );
+          const unit_name = asStr(
+            u.unit_name ??
+              u.UnitName ??
+              u.label ??         // เผื่อบางระบบเก็บชื่อไว้ใน label
+              u.name ??          // หรือ name
+              ''
+          );
+          const description = asStr(
+            u.description ??
+              u.desc ??
+              u.short ??
+              (unit_name ? unit_name : '') // กันไม่ให้เป็นค่าว่าง/NULL
+          );
+          const is_published =
+            typeof u.is_published === 'boolean'
+              ? u.is_published
+              : u.status === 'published' ||
+                u.published === true ||
+                u.IsPublished === true ||
+                u.is_visible === true ||
+                true; // ถ้าไม่ส่งมา ให้ถือว่าแสดง
+
+          return { code, unit_name, description, is_published };
+        })
+        .filter((u) => u.code && u.unit_name); // ต้องมี code + ชื่อหน่วย
 
     try {
       const { data } = await api.get(path('/size-units'));
       const norm = Array.isArray(data) ? normalize(data) : normalize(data?.items);
-      if (norm.length > 0) return setUnits(norm);
+      if (norm.length > 0) {
+        setUnits(norm);
+        return;
+      }
+      console.warn('⚠️ size-units: map ไม่สำเร็จ', data);
     } catch (e1) {
-      // fallback ลอง /sizes
       try {
         const { data } = await api.get(path('/sizes'));
         const norm = Array.isArray(data) ? normalize(data) : normalize(data?.items);
-        if (norm.length > 0) return setUnits(norm);
+        if (norm.length > 0) {
+          setUnits(norm);
+          return;
+        }
+        console.warn('⚠️ sizes: map ไม่สำเร็จ', data);
       } catch (e2) {
-        console.warn('ℹ️ ใช้ค่า default size units (ไม่มี /size-units หรือ /sizes)', e2?.response?.status || e2?.message);
-        setUnits(DEFAULT_SIZE_UNITS);
+        handleApiError(e2, 'โหลดข้อมูลหน่วยขนาดไม่สำเร็จ');
       }
     }
   };
 
-  // เช็ค publish endpoint
+  /* ---------- ตรวจว่ารองรับ publish toggle ไหม ---------- */
   const probePublishSupport = async () => {
     try {
       await api.patch(path('/admin/size-units/__probe__/publish'), { is_published: true });
       setSupportsPublish(true);
     } catch {
-      // ลองอีกชื่อหนึ่ง
       try {
         await api.patch(path('/admin/sizes/__probe__/publish'), { is_published: true });
         setSupportsPublish(true);
@@ -85,52 +117,77 @@ export default function AdminSizes() {
     })();
   }, []);
 
+  /* ---------- Filter ---------- */
   const filteredUnits = useMemo(() => {
     if (!Array.isArray(units)) return [];
     if (filter === 'all') return units;
-    return units.filter(u => {
+    return units.filter((u) => {
       const pub = typeof u.is_published === 'boolean' ? u.is_published : true;
       return filter === 'published' ? pub : !pub;
     });
   }, [units, filter]);
 
-  // เพิ่ม
+  /* ---------- เพิ่ม ---------- */
   const createUnit = async () => {
-    const code = newUnit.code.trim().toLowerCase().replace(/\s+/g, '_');
-    const label = newUnit.label.trim();
-    if (!label) return alert('กรอกชื่อหน่วย (label)');
-    if (!code)  return alert('กรอกรหัสหน่วย (code)');
-    if (units.some(u => u.code === code || u.label === label)) {
-      return alert(`หน่วย "${label}" มีอยู่แล้ว`);
-    }
+    const code = newUnit.code.trim().toUpperCase().replace(/\s+/g, '_');
+    const unit_name = newUnit.unit_name.trim();
+    const description = (newUnit.description || '').trim() || unit_name; // กัน NULL
 
-    // พยายาม POST ผ่าน API หลายชื่อ
-    const payload = { code, label };
+    if (!code) return alert('กรอกรหัสหน่วย (code)');
+    if (!unit_name) return alert('กรอกชื่อหน่วย (unit_name)');
+
+    if (units.some((u) => u.code.toUpperCase() === code))
+      return alert(`รหัสหน่วย "${code}" มีอยู่แล้ว`);
+    if (units.some((u) => u.unit_name === unit_name))
+      return alert(`ชื่อหน่วย "${unit_name}" มีอยู่แล้ว`);
+
+    // ✅ ส่งครบทุกคอลัมน์ที่ DB ต้องการ
+    const payload = {
+      code,                 // เช่น 'CM'
+      unit_name,            // เช่น 'เซนติเมตร'
+      description,          // เช่น 'cm' หรือคำอธิบาย
+      is_published: true,   // เริ่มต้นเปิดใช้งาน
+    };
+
     const tryPost = async (url) => api.post(path(url), payload);
 
     try {
       try { await tryPost('/size-units'); }
       catch { await tryPost('/sizes'); }
       await fetchUnits();
+      setNewUnit({ code: '', unit_name: '', description: '' });
     } catch (err) {
-      console.warn('ℹ️ สร้างผ่าน API ไม่ได้ → เพิ่ม client-side ชั่วคราว');
-      setUnits(prev => [...prev, { code, label }]);
+      handleApiError(err, 'เพิ่มหน่วยไม่สำเร็จ');
     }
-    setNewUnit({ code: '', label: '' });
   };
 
-  // แก้ไข
+  /* ---------- แก้ไข ---------- */
   const editUnit = async (u) => {
-    const name = window.prompt('ชื่อหน่วยใหม่', u.label);
-    if (!name || name.trim() === u.label) return;
-    const nextLabel = name.trim();
-    const nextCode  = nextLabel.toLowerCase().replace(/\s+/g, '_');
+    const name = window.prompt('ชื่อหน่วยใหม่ (unit_name)', u.unit_name);
+    if (!name) return;
+    const desc = window.prompt('คำอธิบาย/รหัสย่อ (description)', u.description || u.unit_name || '');
+    if (desc === null) return;
 
-    if (units.some(x => x.code !== u.code && (x.label === nextLabel || x.code === nextCode))) {
-      return alert(`หน่วย "${nextLabel}" ชนกับที่มีอยู่`);
+    const next_name = name.trim();
+    const next_desc = (desc || '').trim() || next_name;
+
+    if (!next_name) return alert('กรุณากรอกชื่อหน่วย');
+
+    if (units.some((x) => x.code === u.code && x.unit_name === next_name && x.description === next_desc)) {
+      // ไม่มีการเปลี่ยนแปลง
+      return;
+    }
+    if (units.some((x) => x.code !== u.code && x.unit_name === next_name)) {
+      return alert(`ชื่อหน่วย "${next_name}" ซ้ำกับรายการอื่น`);
     }
 
-    const payload = { code: nextCode, label: nextLabel };
+    // ไม่บังคับแก้ code จากหน้าแก้ไข (คงเดิม)
+    const payload = {
+      unit_name: next_name,
+      description: next_desc,
+      is_published: typeof u.is_published === 'boolean' ? u.is_published : true,
+    };
+
     const tryPut = async (url) => api.put(path(`${url}/${u.code}`), payload);
 
     try {
@@ -138,32 +195,30 @@ export default function AdminSizes() {
       catch { await tryPut('/sizes'); }
       await fetchUnits();
     } catch (err) {
-      console.warn('ℹ️ แก้ผ่าน API ไม่ได้ → ปรับ client-side ชั่วคราว');
-      setUnits(prev => prev.map(x => x.code === u.code ? { ...x, code: nextCode, label: nextLabel } : x));
+      handleApiError(err, 'แก้ไขหน่วยไม่สำเร็จ');
     }
   };
 
-  // ลบ
+  /* ---------- ลบ ---------- */
   const deleteUnit = async (u) => {
-    if (!window.confirm(`ลบหน่วย "${u.label}" ?`)) return;
-
+    if (!window.confirm(`ลบหน่วย "${u.unit_name}" ?`)) return;
     const tryDelete = async (url) => api.delete(path(`${url}/${u.code}`));
     try {
       try { await tryDelete('/size-units'); }
       catch { await tryDelete('/sizes'); }
       await fetchUnits();
     } catch (err) {
-      console.warn('ℹ️ ลบผ่าน API ไม่ได้ → ลบ client-side ชั่วคราว');
-      setUnits(prev => prev.filter(x => x.code !== u.code));
+      handleApiError(err, 'ลบหน่วยไม่สำเร็จ');
     }
   };
 
-  // toggle publish
+  /* ---------- toggle publish ---------- */
   const togglePublish = async (u) => {
     if (!supportsPublish) return;
     const current = typeof u.is_published === 'boolean' ? u.is_published : true;
+    const tryPatch = async (url) =>
+      api.patch(path(`${url}/${u.code}/publish`), { is_published: !current });
 
-    const tryPatch = async (url) => api.patch(path(`${url}/${u.code}/publish`), { is_published: !current });
     try {
       try { await tryPatch('/admin/size-units'); }
       catch { await tryPatch('/admin/sizes'); }
@@ -175,41 +230,48 @@ export default function AdminSizes() {
 
   if (loading) return <div style={{ padding: 12 }}>กำลังโหลดข้อมูล…</div>;
 
+  /* ---------- UI ---------- */
   return (
     <div className="pm-page">
-      {/* ปุ่มกลับ */}
-      <div style={{display:'flex', gap:8, margin:'12px 0 20px', flexWrap:'wrap'}}>
+      {/* Back */}
+      <div style={{ display: 'flex', gap: 8, margin: '12px 0 20px', flexWrap: 'wrap' }}>
         <Link to="/admin/products" className="btn btn-ghost">← กลับไปจัดการสินค้า</Link>
       </div>
 
       <h2>จัดการหน่วยขนาด</h2>
 
       {/* ฟอร์มเพิ่ม */}
-      <div className="pm-actions mt-8" style={{ flexWrap:'wrap' }}>
+      <div className="pm-actions mt-8" style={{ flexWrap: 'wrap', rowGap: 8 }}>
         <input
-          placeholder="code (เช่น: cm, inch)"
+          placeholder="code (เช่น: CM, MM, KG)"
           value={newUnit.code}
-          onChange={(e)=>setNewUnit(prev => ({ ...prev, code: e.target.value }))}
-          style={{ maxWidth:220 }}
+          onChange={(e) => setNewUnit((p) => ({ ...p, code: e.target.value }))}
+          style={{ maxWidth: 180 }}
         />
         <input
-          placeholder="label (เช่น: ซม., นิ้ว)"
-          value={newUnit.label}
-          onChange={(e)=>setNewUnit(prev => ({ ...prev, label: e.target.value }))}
-          style={{ minWidth:220 }}
+          placeholder="ชื่อหน่วย (unit_name) เช่น: เซนติเมตร"
+          value={newUnit.unit_name}
+          onChange={(e) => setNewUnit((p) => ({ ...p, unit_name: e.target.value }))}
+          style={{ minWidth: 240 }}
+        />
+        <input
+          placeholder="คำอธิบาย/รหัสย่อ (description) เช่น: cm"
+          value={newUnit.description}
+          onChange={(e) => setNewUnit((p) => ({ ...p, description: e.target.value }))}
+          style={{ minWidth: 200 }}
         />
         <button type="button" className="btn btn-primary" onClick={createUnit}>
           เพิ่มหน่วยขนาด
         </button>
       </div>
 
-      {/* ฟิลเตอร์ (เฉพาะกรณีรองรับ publish) */}
+      {/* ฟิลเตอร์ (เฉพาะรองรับ publish) */}
       {supportsPublish && (
         <div className="pm-toolbar">
           <div className="seg">
-            <button type="button" className={`seg-btn ${filter==='all' ? 'active': ''}`} onClick={()=>setFilter('all')}>ทั้งหมด</button>
-            <button type="button" className={`seg-btn ${filter==='published' ? 'active': ''}`} onClick={()=>setFilter('published')}>เฉพาะที่แสดง</button>
-            <button type="button" className={`seg-btn ${filter==='hidden' ? 'active': ''}`} onClick={()=>setFilter('hidden')}>เฉพาะที่ซ่อน</button>
+            <button type="button" className={`seg-btn ${filter === 'all' ? 'active' : ''}`} onClick={() => setFilter('all')}>ทั้งหมด</button>
+            <button type="button" className={`seg-btn ${filter === 'published' ? 'active' : ''}`} onClick={() => setFilter('published')}>เฉพาะที่แสดง</button>
+            <button type="button" className={`seg-btn ${filter === 'hidden' ? 'active' : ''}`} onClick={() => setFilter('hidden')}>เฉพาะที่ซ่อน</button>
           </div>
         </div>
       )}
@@ -219,14 +281,15 @@ export default function AdminSizes() {
         <table className="pm-table pm-fixed">
           <thead>
             <tr>
-              <th style={{width:220}}>รหัส (code)</th>
-              <th>ชื่อหน่วย (label)</th>
-              <th style={{textAlign:'center', width: supportsPublish ? 260 : 200}}>จัดการ</th>
-              {supportsPublish && <th style={{textAlign:'center', width:140}}>แสดงผล</th>}
+              <th style={{ width: 160 }}>รหัส (code)</th>
+              <th style={{ width: 280 }}>ชื่อหน่วย (unit_name)</th>
+              <th>คำอธิบาย (description)</th>
+              <th style={{ textAlign: 'center', width: supportsPublish ? 260 : 200 }}>จัดการ</th>
+              {supportsPublish && <th style={{ textAlign: 'center', width: 140 }}>แสดงผล</th>}
             </tr>
           </thead>
           <tbody>
-            {(filteredUnits || units).map(u => {
+            {(filteredUnits || units).map((u) => {
               const published = typeof u.is_published === 'boolean' ? u.is_published : true;
               return (
                 <tr key={u.code}>
@@ -237,14 +300,15 @@ export default function AdminSizes() {
                         {published ? 'กำลังแสดง' : 'ถูกซ่อน'}
                       </span>
                     )}
-                    <span className="name-with-badges">{u.label}</span>
+                    <span className="name-with-badges">{u.unit_name}</span>
                   </td>
+                  <td>{u.description}</td>
                   <td className="cell-actions">
-                    <button className="btn btn-ghost" onClick={()=>editUnit(u)}>แก้ไข</button>
-                    <button className="btn btn-danger" onClick={()=>deleteUnit(u)}>ลบ</button>
+                    <button className="btn btn-ghost" onClick={() => editUnit(u)}>แก้ไข</button>
+                    <button className="btn btn-danger" onClick={() => deleteUnit(u)}>ลบ</button>
                   </td>
                   {supportsPublish && (
-                    <td className="cell-actions" style={{ textAlign:'center' }}>
+                    <td className="cell-actions" style={{ textAlign: 'center' }}>
                       <button
                         className={`btn ${published ? 'btn-warn' : 'btn-primary'}`}
                         onClick={() => togglePublish(u)}
@@ -258,7 +322,9 @@ export default function AdminSizes() {
               );
             })}
             {(!units || units.length === 0) && (
-              <tr><td colSpan={supportsPublish ? 4 : 3} style={{ color:'#777' }}>— ไม่มีหน่วยขนาด —</td></tr>
+              <tr>
+                <td colSpan={supportsPublish ? 5 : 4} style={{ color: '#777' }}>— ไม่มีหน่วยขนาด —</td>
+              </tr>
             )}
           </tbody>
         </table>

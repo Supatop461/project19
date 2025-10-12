@@ -12,6 +12,7 @@ import "./InventoryPage.css";
 
 /* utils */
 const fmt = (n) => new Intl.NumberFormat("th-TH").format(Number(n || 0));
+const getStock = (it) => Number(it?.stock ?? it?.stock_qty ?? 0);
 const currency = (n) =>
   new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(
     Number(n || 0)
@@ -108,8 +109,21 @@ function JsonDetails({ data, title = "รายละเอียด (JSON)" }) 
   );
 }
 
+/* ─────────────────────────── Main ─────────────────────────── */
 export default function InventoryPage() {
   const [tab, setTab] = useState("overview"); // overview | receive | issue | moves
+
+  // state สำหรับ “โฟกัส/เด้งไปดูสินค้าใหม่” บนภาพรวม
+  const [focusSignal, setFocusSignal] = useState(0);
+  const [focusQuery, setFocusQuery] = useState(""); // ชื่อหรือ SKU
+
+  // callback หลังรับเข้าเสร็จ: เด้งไปภาพรวม + โฟกัสรายการที่เพิ่งรับเข้า
+  function handleAfterReceive({ name, sku }) {
+    setFocusQuery(name || sku || "");
+    setFocusSignal((s) => s + 1);
+    setTab("overview");
+  }
+
   return (
     <div className="inv">
       <h1 className="inv-title">Inventory Management</h1>
@@ -132,8 +146,10 @@ export default function InventoryPage() {
       </div>
 
       <div className="inv-section">
-        {tab === "overview" && <InventoryOverview />}
-        {tab === "receive" && <ReceiveForm />}
+        {tab === "overview" && (
+          <InventoryOverview focusSignal={focusSignal} focusQuery={focusQuery} />
+        )}
+        {tab === "receive" && <ReceiveForm onAfterSuccess={handleAfterReceive} />}
         {tab === "issue" && <IssueForm />}
         {tab === "moves" && <MovesPanel />}
       </div>
@@ -142,7 +158,7 @@ export default function InventoryPage() {
 }
 
 /* ---------- 1) ภาพรวม ---------- */
-function InventoryOverview() {
+function InventoryOverview({ focusSignal, focusQuery }) {
   const [q, setQ] = useState("");
   const [scope, setScope] = useState("variant");
   const [order, setOrder] = useState("low_stock");
@@ -169,7 +185,7 @@ function InventoryOverview() {
         order,
         limit: pageSize,
         offset,
-        _t: Date.now(), // 🧊 cache-buster
+        _t: Date.now(),
       });
       setItems(data.items || []);
       setTotal(Number(data.total || 0));
@@ -187,6 +203,17 @@ function InventoryOverview() {
   useEffect(() => {
     load(); // eslint-disable-next-line
   }, [scope, order, page]);
+
+  // เมื่อมีสัญญาณโฟกัสจากฟอร์มรับเข้า → ตั้งค่าค้นหา/เรียง แล้วโหลด
+  useEffect(() => {
+    if (!focusSignal) return;
+    setOrder("newest");
+    setQ(focusQuery || "");
+    setPage(1);
+    const t = setTimeout(load, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [focusSignal]);
 
   return (
     <div>
@@ -258,7 +285,7 @@ function InventoryOverview() {
               exportTablePDF(
                 tableRef,
                 `inventory_overview_${new Date().toISOString().slice(0, 10)}.pdf`,
-                false /* portrait พอ */
+                false
               )
             }
           >
@@ -277,7 +304,7 @@ function InventoryOverview() {
               {scope === "variant" && <th className="text-right">ราคา</th>}
             </tr>
           </thead>
-        <tbody>
+          <tbody>
             {loading ? (
               <tr>
                 <td className="p-4" colSpan={scope === "variant" ? 4 : 2}>
@@ -299,7 +326,7 @@ function InventoryOverview() {
                     </div>
                   </td>
                   {scope === "variant" && <td>{it.sku || "-"}</td>}
-                  <td className="text-right">{fmt(it.stock)}</td>
+                  <td className="text-right">{fmt(getStock(it))}</td>
                   {scope === "variant" && (
                     <td className="text-right">
                       {it.selling_price != null
@@ -340,7 +367,7 @@ function InventoryOverview() {
 }
 
 /* ---------- 2) รับเข้า (IN) ---------- */
-function ReceiveForm() {
+function ReceiveForm({ onAfterSuccess }) {
   const [variantId, setVariantId] = useState("");
   const [selected, setSelected] = useState(null);
   const [qty, setQty] = useState("");
@@ -349,6 +376,18 @@ function ReceiveForm() {
   const [receivedAt, setReceivedAt] = useState(nowLocalDatetime());
   const [resJson, setResJson] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [pickerKey, setPickerKey] = useState(1);
+
+  function resetForm() {
+    setSelected(null);
+    setVariantId("");
+    setQty("");
+    setUnitCost("");
+    setNote("");
+    setReceivedAt(nowLocalDatetime());
+    setResJson(null);
+    setPickerKey((k) => k + 1); // remount picker → เคลียร์ช่องค้นหา/ลิสต์
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -358,24 +397,23 @@ function ReceiveForm() {
     }
     setLoading(true);
     try {
-      const data = await receiveInventory({
+      const payload = {
         variant_id: Number(variantId),
         qty: Number(qty),
         unit_cost: Number(unitCost),
         received_at: receivedAt || null,
         note: note || null,
-      });
+      };
+      const data = await receiveInventory(payload);
       setResJson(data);
 
       toast.success(
-        `รับเข้าเรียบร้อย • lot_id ${data?.lot?.lot_id} • qty ${fmt(
-          qty
-        )} • ฿${unitCost}/หน่วย`,
+        `รับเข้าเรียบร้อย • lot_id ${data?.lot?.lot_id} • qty ${fmt(qty)} • ฿${unitCost}/หน่วย`,
         { duration: 4000 }
       );
 
-      setQty("");
-      setNote("");
+      onAfterSuccess?.({ name: selected?.product_name, sku: selected?.sku });
+      resetForm();
     } catch (e) {
       console.error(e);
       toast.error(e?.response?.data?.error || "รับเข้าไม่สำเร็จ");
@@ -387,6 +425,7 @@ function ReceiveForm() {
   return (
     <form onSubmit={onSubmit} className="inv-form">
       <VariantPicker
+        key={pickerKey}
         mode="in"
         onChange={(it) => {
           setVariantId(it.variant_id);
@@ -414,7 +453,7 @@ function ReceiveForm() {
           {selected && (
             <div className="inv-mini">
               {selected.product_name} • SKU: {selected.sku || "-"} • คงคลัง:{" "}
-              {fmt(selected.stock)}
+              {fmt(getStock(selected))}
             </div>
           )}
         </div>
@@ -492,6 +531,18 @@ function IssueForm() {
   const [reason, setReason] = useState("SALE");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [pickerKey, setPickerKey] = useState(1);
+
+  function resetForm() {
+    setSelected(null);
+    setVariantId("");
+    setQty("");
+    setNote("");
+    setRef("");
+    setReason("SALE");
+    setResult(null);
+    setPickerKey((k) => k + 1); // เคลียร์ VariantPicker
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -516,9 +567,7 @@ function IssueForm() {
         { duration: 4500 }
       );
 
-      setQty("");
-      setNote("");
-      setRef("");
+      resetForm();
     } catch (e) {
       console.error(e);
       toast.error(e?.response?.data?.error || "ตัดสต๊อกไม่สำเร็จ");
@@ -540,6 +589,7 @@ function IssueForm() {
     <div className="inv-layout">
       <form onSubmit={onSubmit} className="inv-form">
         <VariantPicker
+          key={pickerKey}
           mode="out"
           onChange={(it) => {
             setVariantId(it.variant_id);
@@ -562,7 +612,7 @@ function IssueForm() {
             {selected && (
               <div className="inv-mini">
                 {selected.product_name} • SKU: {selected.sku || "-"} • คงคลัง:{" "}
-                {fmt(selected.stock)}
+                {fmt(getStock(selected))}
               </div>
             )}
           </div>
@@ -699,9 +749,9 @@ function MovesPanel() {
         type: type || undefined,
         from: from || undefined,
         to: to || undefined,
-        q: (override.q ?? kw) || undefined, // ✅ ป้องกัน ESLint
+        q: (override.q ?? kw) || undefined,
         limit: override.limit ?? limit,
-        _t: Date.now(), // 🧊 cache-buster
+        _t: Date.now(),
       });
       setRows(data || []);
     } catch (e) {
@@ -724,6 +774,12 @@ function MovesPanel() {
 
   const limitOptions = [10, 50, 100, 200];
 
+  useEffect(() => {
+    // โหลดครั้งแรก
+    load();
+    // eslint-disable-next-line
+  }, []);
+
   return (
     <div className="inv-form">
       {/* แถวค้นหาแบบคีย์เวิร์ด (ชื่อ/SKU) */}
@@ -736,7 +792,6 @@ function MovesPanel() {
             className="inv-input"
             placeholder="เช่น กุหลาบ หรือ P31-PD30-53"
           />
-          <Help>พิมพ์ชื่อสินค้า หรือ SKU แล้วกด “ค้นหา”</Help>
         </div>
         <button
           type="button"

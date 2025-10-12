@@ -1,0 +1,271 @@
+/* src/admin/admin-sizes.css — updated: ปุ่มแสดง/ไม่แสดง ชัดขึ้น */
+
+/* ---------- Theme tokens ---------- */
+:root {
+  --brand: #6fb36a;
+  --brand-dark: #5aa756;
+  --ink: #222;
+  --muted: #6b7280;
+  --border: #e8ecef;
+  --border-strong: #d7dfe6;
+  --bg: #ffffff;
+  --bg-soft: #f7faf9;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .05);
+}
+
+/* ---------- Page / Head ---------- */
+.pm-page,
+.page {
+  max-width: min(1440px, 98vw);
+  margin: 0 auto;
+  padding: clamp(12px, 2vw, 20px);
+}
+.pm-page h2,
+.page-head h2 {
+  font-size: clamp(18px, 2.2vw, 24px);
+  margin: 4px 0 12px;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: left;
+}
+
+/* ---------- Cards ---------- */
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: clamp(14px, 2vw, 20px);
+  margin-bottom: clamp(12px, 1.6vw, 16px);
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Form (left-aligned) ---------- */
+.pm-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: .6rem;
+  flex-wrap: wrap;
+}
+.pm-actions input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: clamp(10px, 1.4vw, 12px) clamp(12px, 1.8vw, 14px);
+  outline: none;
+  font-size: clamp(14px, 1.5vw, 16px);
+  background: var(--bg-soft);
+  text-align: left;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.pm-actions input::placeholder {
+  color: #9aa3af;
+  text-align: left;
+}
+.pm-actions input:focus {
+  border-color: #8ecb84;
+  box-shadow: 0 0 0 3px rgba(142, 203, 132, .22);
+  background: #fff;
+}
+
+/* ---------- Toolbar / Segmented ---------- */
+.pm-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  margin-top: 14px;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  background: #f7f9fb;
+  border-radius: 999px;
+  padding: 4px;
+  gap: 4px;
+}
+.seg-btn {
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+/* ---------- Segmented Filter Buttons (ทั้งหมด / เฉพาะที่แสดง / เฉพาะที่ซ่อน) ---------- */
+.seg-btn {
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 15px;
+  background: #f4f6f8;
+  border: 1px solid #dfe3e8;
+  color: #333;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.seg-btn:hover {
+  background: #eaeff0;
+  border-color: #c8d1d9;
+}
+.seg-btn.active {
+  background: var(--brand);
+  border-color: var(--brand-dark);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(111,179,106,.25);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  border: 1px solid #dfe3e8;
+  background: #f6f7f9;
+  color: #111827;
+  padding: clamp(10px, 1.4vw, 12px) clamp(16px, 2.2vw, 20px);
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: clamp(14px, 1.6vw, 16px);
+  transition: all .15s ease;
+}
+.btn:hover {
+  filter: brightness(1.03);
+}
+.btn-ghost {
+  background: #f4f6f8;
+}
+.btn-danger {
+  background: #ffecec;
+  border-color: #ffd1d1;
+  color: #b12a2a;
+}
+
+/* ✅ ปุ่มแสดง / ไม่แสดง (สีเข้มและชัดเจนขึ้น) */
+.btn-primary {
+  background: #3b9141;       /* เขียวเข้มสด */
+  border-color: #2f7735;
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(47, 119, 53, .25);
+}
+.btn-primary:hover {
+  background: #2f7735;
+  border-color: #275f2b;
+}
+
+.btn-warn {
+  background: #ffdede;       /* แดงอ่อน (contrast ชัดเจน) */
+  border-color: #ff9c9c;
+  color: #8a0000;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(255, 140, 140, .25);
+}
+.btn-warn:hover {
+  background: #ffb8b8;
+  border-color: #ff7070;
+  color: #600000;
+}
+
+/* ปุ่มในตาราง — ใหญ่ขึ้น */
+.cell-actions .btn {
+  background: #f6f7f9;
+  border: 1px solid #e3e7ee;
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-size: 15px;
+  margin: 2px 4px;
+}
+
+/* ---------- Pills (สถานะ) ---------- */
+.pill {
+  display: inline-block;
+  border: 1px solid #d8ead6;
+  background: #eef5ee;
+  color: #2b5b28;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  vertical-align: middle;
+}
+.pill.off {
+  background: #f6f7f9;
+  color: #6b7280;
+  border-color: #e3e7ee;
+}
+
+/* ---------- Table ---------- */
+.pm-table-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: clamp(10px, 1.6vw, 16px);
+  margin-top: 12px;
+  box-shadow: var(--shadow);
+}
+.pm-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.pm-table th,
+.pm-table td {
+  padding: clamp(10px, 1.2vw, 12px);
+  border-bottom: 1px solid #e5e8eb;
+  font-size: clamp(14px, 1.5vw, 15.5px);
+  color: #111827;
+  text-align: left;
+  vertical-align: middle;
+  word-break: break-word;
+}
+.pm-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f9fbfa;
+  font-weight: 700;
+}
+.pm-fixed { table-layout: fixed; }
+.cell-actions { text-align: left; }
+
+/* ให้ code / unit_name / description ชิดซ้ายเสมอ */
+.pm-table td:nth-child(1),
+.pm-table td:nth-child(2),
+.pm-table td:nth-child(3) {
+  text-align: left;
+}
+
+/* ---------- Text / Badges ---------- */
+.name-with-badges {
+  font-weight: 600;
+  color: #111827;
+}
+
+/* ---------- Links ---------- */
+a.btn,
+.btn a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 920px) {
+  .pm-page { max-width: 98vw; }
+  .pm-table th,
+  .pm-table td { font-size: 14px; }
+}
+@media (max-width: 680px) {
+  .cell-actions .btn { padding: 8px 12px; font-size: 14px; }
+  .btn { padding: 10px 14px; }
+  .pm-actions { gap: .5rem; }
+}
+@media (max-width: 520px) {
+  .card,
+  .pm-table-wrap { padding: 12px; border-radius: 14px; }
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

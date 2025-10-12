@@ -1,0 +1,23 @@
+.user-page { padding: 24px; }
+.user-page h2 { font-size: 1.6rem; margin-bottom: 16px; }
+
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.toolbar input { flex: 1; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; }
+.toolbar select, .toolbar button { padding: 8px 10px; border-radius: 8px; border: 1px solid #ddd; background: #fff; cursor: pointer; }
+.toolbar button:disabled { opacity: .6; cursor: default; }
+
+.user-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; }
+.user-table th, .user-table td { padding: 10px 12px; border-bottom: 1px solid #eee; text-align: left; }
+.user-table th { background: #f7f7f7; font-weight: 600; }
+
+.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+button { padding: 6px 10px; border: none; border-radius: 8px; cursor: pointer; }
+button.primary { background: #4f9f4a; color: #fff; }
+button.ghost { background: #f1f1f1; color: #333; }
+button.ban { background: #e74c3c; color: #fff; }
+button.unban { background: #2ecc71; color: #fff; }
+.active { color: #2ecc71; font-weight: 600; }
+.banned { color: #e74c3c; font-weight: 600; }
+
+.badge { background: #eef2f7; color: #334; padding: 2px 8px; border-radius: 999px; font-size: .85rem; }
+.badge-admin { background: #eaf8ea; color: #2c7a2c; padding: 2px 8px; border-radius: 999px; font-size: .85rem; }

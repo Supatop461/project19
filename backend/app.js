@@ -12,12 +12,14 @@ app.use(cors());
 app.use(express.json());
 
 // ---------- Routes (import) ----------
-const authRoutes          = require('./routes/auth');            // public
-const adminProductRoutes  = require('./routes/adminProducts');   // admin/staff only
-const adminVariantsRoutes = require('./routes/adminVariants');   // admin/staff only
-const ordersRouter        = require('./routes/orders');          // admin/staff only
-const inventoryRoutes     = require('./routes/inventory');       // ✅ inventory
-const requireAuth = require('./middleware/auth');
+const authRoutes           = require('./routes/auth');            // public
+const adminProductRoutes   = require('./routes/adminProducts');   // admin/staff only
+const adminVariantsRoutes  = require('./routes/adminVariants');   // admin/staff only
+const adminUnitsRoutes     = require('./routes/adminUnits');      // units
+const adminSizeUnitsRoutes = require('./routes/adminSizeUnits');  // size-units
+const ordersRouter         = require('./routes/orders');          // admin/staff only
+const inventoryRoutes      = require('./routes/inventory');       // ✅ inventory
+
 // ---------- Auth middlewares ----------
 const { requireAuth, requireRole } = require('./middleware/auth');
 const guardAdmin = [requireAuth, requireRole(['admin', 'staff'])];
@@ -26,24 +28,32 @@ const guardAdmin = [requireAuth, requireRole(['admin', 'staff'])];
 app.use('/api/auth', authRoutes);
 
 // ---------- 2) Admin area (ต้องมี token + role: admin/staff) ----------
-app.use('/api/admin', guardAdmin, adminProductRoutes);
-app.use('/api/admin', guardAdmin, adminVariantsRoutes);
+app.use('/api/admin', guardAdmin, adminProductRoutes);   // /api/admin/products...
+app.use('/api/admin', guardAdmin, adminVariantsRoutes);  // /api/admin/variants...
 
-// ---------- 3) Inventory (เริ่มให้ทดสอบง่าย ๆ ก่อน ไม่ใส่ guard; ถ้าพร้อมค่อยเปิด guardAdmin) ----------
+// หน่วยสินค้า / หน่วยขนาด (admin)
+app.use('/api/admin/units',       guardAdmin, adminUnitsRoutes);
+app.use('/api/admin/size-units',  guardAdmin, adminSizeUnitsRoutes);
+app.use('/api/admin/sizes',       guardAdmin, adminSizeUnitsRoutes); // alias admin อีกเส้น
+
+// ---------- 3) Aliases (เพื่อความเข้ากันได้กับฟรอนต์เดิม) ----------
+// หมายเหตุ: alias เหล่านี้ "ไม่ใส่ guard" เพื่อให้ดึง options/list ได้ง่ายจากฟอร์ม
+// ถ้าต้องการล็อกให้เข้มขึ้น ให้ย้ายสองบรรทัดนี้ไปอยู่หลัง guardAdmin
+app.use('/api/units',      adminUnitsRoutes);
+app.use('/api/size-units', adminSizeUnitsRoutes);
+app.use('/api/sizes',      adminSizeUnitsRoutes);
+
+// ---------- 4) Inventory ----------
 app.use('/api/inventory', inventoryRoutes);
 
-// ---------- 4) Orders ----------
+// ---------- 5) Orders (ต้องล็อกอิน + มี role) ----------
 app.use('/api/orders', guardAdmin, ordersRouter);
 
-// ---------- 5) Healthcheck ----------
-app.get('/api/health', (req, res) => res.json({ ok: true }));
-
-// ---------- 6) DEBUG: ping จาก app.js (ต้องตอบได้) ----------
-app.get('/api/inventory/ping-app', (req, res) => res.json({ ok: true, where: 'app.js' }));
+// ---------- 6) Healthcheck / Debug ----------
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api/inventory/ping-app', (_req, res) => res.json({ ok: true, where: 'app.js' }));
 
 // ---------- 7) 404 handler (ต้องอยู่ท้ายสุดเสมอ) ----------
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
-
-app.use('/api/orders', requireAuth, ordersRouter);
 
 module.exports = app;
