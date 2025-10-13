@@ -25,6 +25,7 @@ export default function AdminLayout() {
     { label: "สินค้าคงคลัง",   icon: "🏬", path: "/admin/inventory" },
     { label: "คำสั่งซื้อ",      icon: "🧾", path: "/admin/orders", badge: true },
     { label: "สรุปยอดขาย",     icon: "💰", path: "/admin/reports" },
+     { label: "ผู้ใช้/สิทธิ์",    icon: "👤", path: "/admin/user-management" },
   ];
 
   const logout = () => {

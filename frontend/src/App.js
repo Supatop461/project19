@@ -1,4 +1,4 @@
-// [FRONTEND] src/App.js
+// [FRONTEND] src/App.js — FIX useLocation outside Router
 import React, { useEffect } from "react";
 import {
   BrowserRouter, Routes, Route, Navigate, useLocation,
@@ -17,6 +17,7 @@ import AdminCategories    from "./admin/AdminCategories";
 import AdminSubcategories from "./admin/AdminSubcategories";
 import AdminUnits         from "./admin/AdminUnits";
 import AdminSizes         from "./admin/AdminSizes";
+import UserManagement     from "./admin/UserManagement";
 
 import Addresses     from "./account/Addresses";
 import SignUp        from "./pages/SignUp";
@@ -30,20 +31,18 @@ import Tools         from "./pages/Tools";
 import CartPage      from "./pages/CartPage";
 
 import { Toaster } from "react-hot-toast";
-
-// 🟢 Header บนทุกหน้า
 import HeaderClassic from "./components/HeaderClassic";
+import Footer from "./components/Footer";
 
-/* ================== ตั้งค่า API BASE ทั้งแอป (no import.meta) ================== */
+/* ================== API BASE ================== */
 const pickApiBase = () => {
-  if (axios.defaults?.baseURL) return axios.defaults.baseURL;                 // ถ้าถูกตั้งไว้ก่อนหน้า
-  if (process.env.REACT_APP_API_BASE) return process.env.REACT_APP_API_BASE; // .env ของ CRA
-  return "http://localhost:3001";                                            // fallback
+  if (axios.defaults?.baseURL) return axios.defaults.baseURL;
+  if (process.env.REACT_APP_API_BASE) return process.env.REACT_APP_API_BASE;
+  return "http://localhost:3001";
 };
 axios.defaults.baseURL = pickApiBase();
-/* ====================================================================== */
+/* ============================================= */
 
-/* ====================== Helpers ====================== */
 const getToken = () => localStorage.getItem("token") || "";
 const getRole  = () => (localStorage.getItem("role") || "").toLowerCase();
 const isAdminRole = (r) =>
@@ -62,15 +61,7 @@ class ErrorBoundary extends React.Component {
       return (
         <div style={{ padding: 16 }}>
           <h2>เกิดข้อผิดพลาดในหน้า</h2>
-          <pre
-            style={{
-              background: "#111",
-              color: "#0f0",
-              padding: 12,
-              borderRadius: 8,
-              overflow: "auto",
-            }}
-          >
+          <pre style={{ background:"#111", color:"#0f0", padding:12, borderRadius:8, overflow:"auto" }}>
 {String(this.state.err?.message || this.state.err)}
           </pre>
         </div>
@@ -86,12 +77,7 @@ function RequireAuth({ children }) {
   const loc = useLocation();
   if (!getToken()) {
     const redirect = encodeURIComponent(loc.pathname + loc.search);
-    return (
-      <Navigate
-        to={`/login?redirect=${redirect}&msg=login_required`}
-        replace
-      />
-    );
+    return <Navigate to={`/login?redirect=${redirect}&msg=login_required`} replace />;
   }
   return children;
 }
@@ -100,94 +86,92 @@ function RequireAdmin({ children }) {
   const loc = useLocation();
   if (!getToken()) {
     const redirect = encodeURIComponent(loc.pathname + loc.search);
-    return (
-      <Navigate
-        to={`/login?redirect=${redirect}&msg=login_required`}
-        replace
-      />
-    );
+    return <Navigate to={`/login?redirect=${redirect}&msg=login_required`} replace />;
   }
   if (!isAdminRole(getRole())) return <Navigate to="/" replace />;
   return children;
 }
 /* ===================================================== */
 
-/* ======================== App ========================= */
-export default function App() {
+/* ============== InnerApp (อยู่ภายใน Router) ============== */
+function InnerApp() {
+  const { pathname } = useLocation();                 // ✅ อยู่ใต้ Router แล้ว ปลอดภัย
+  const isAdminRoute = pathname.startsWith("/admin");
+
   useEffect(() => {
     const t = getToken();
     if (t) axios.defaults.headers.common["Authorization"] = `Bearer ${t}`;
   }, []);
 
+  // ✅ ลูกค้า & guest เห็น, แอดมิน/หน้า /admin ไม่เห็น
+  const role = getRole();
+  const showFooter = !isAdminRoute && role !== "admin" && role !== "staff" && role !== "superadmin";
+
+  return (
+    <>
+      <HeaderClassic />
+      <Toaster position="top-right" />
+
+      <Routes>
+        <Route path="/" element={<HomeUser />} />
+        <Route path="/home-user" element={<Navigate to="/" replace />} />
+
+        <Route path="/plants" element={<Plants />} />
+        <Route path="/tools" element={<Tools />} />
+        <Route path="/products" element={<ProductList />} />
+        <Route path="/cart" element={<CartPage />} />
+
+        <Route
+          path="/account/addresses"
+          element={
+            <RequireAuth>
+              <Addresses />
+            </RequireAuth>
+          }
+        />
+
+        <Route
+          path="/admin"
+          element={
+            <RequireAdmin>
+              <AdminLayout />
+            </RequireAdmin>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="products" element={<ProductManagement />} />
+          <Route path="products/:id" element={<ProductEditPage />} />
+          <Route path="products/:productId/variants" element={<VariantsManager />} />
+          <Route path="products/:id/variants"        element={<VariantsManager />} />
+          <Route path="orders" element={<OrderManagement />} />
+          <Route path="categories" element={<AdminCategories />} />
+          <Route path="subcategories" element={<AdminSubcategories />} />
+          <Route path="units" element={<AdminUnits />} />
+          <Route path="sizes" element={<AdminSizes />} />
+          <Route path="inventory" element={<InventoryPage />} />
+          <Route path="user-management" element={<UserManagement />} />
+        </Route>
+
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/register" element={<SignUp />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+
+      {showFooter && <Footer />}
+    </>
+  );
+}
+
+/* ======================== App (สร้าง Router) ========================= */
+export default function App() {
+  // ❗❗ ห้ามใช้ useLocation ที่นี่ เพราะอยู่นอก Router
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        {/* ✅ Header + Toaster แสดงบนทุกหน้า */}
-        <HeaderClassic />
-        <Toaster position="top-right" />
-
-        <Routes>
-          {/* ✅ หน้าแรก */}
-          <Route path="/" element={<HomeUser />} />
-          <Route path="/home-user" element={<Navigate to="/" replace />} />
-
-          {/* ✅ Landing ต้นไม้/อุปกรณ์ + รายการสินค้า */}
-          <Route path="/plants" element={<Plants />} />
-          <Route path="/tools" element={<Tools />} />
-          <Route path="/products" element={<ProductList />} />
-
-          {/* ✅ ตะกร้าสินค้า */}
-          <Route path="/cart" element={<CartPage />} />
-
-          {/* ✅ ต้องล็อกอิน */}
-          <Route
-            path="/account/addresses"
-            element={
-              <RequireAuth>
-                <Addresses />
-              </RequireAuth>
-            }
-          />
-
-          {/* ✅ แอดมิน (ครอบด้วย AdminLayout + RequireAdmin) */}
-          <Route
-            path="/admin"
-            element={
-              <RequireAdmin>
-                <AdminLayout />
-              </RequireAdmin>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="products" element={<ProductManagement />} />
-            <Route path="products/:id" element={<ProductEditPage />} />
-
-            {/* 🟢 เส้นทาง Variants (รองรับทั้ง :productId และ :id) */}
-            <Route path="products/:productId/variants" element={<VariantsManager />} />
-            <Route path="products/:id/variants"        element={<VariantsManager />} />
-
-            <Route path="orders" element={<OrderManagement />} />
-
-            {/* ✅ 4 หน้าใหม่ */}
-            <Route path="categories"    element={<AdminCategories />} />
-            <Route path="subcategories" element={<AdminSubcategories />} />
-            <Route path="units"         element={<AdminUnits />} />
-            <Route path="sizes"         element={<AdminSizes />} />
-
-            {/* 🟢 Inventory (ของจริง) */}
-            <Route path="inventory" element={<InventoryPage />} />
-          </Route> {/* ← ปิดบล็อก /admin ให้เรียบร้อย */}
-
-          {/* ✅ Auth (PUBLIC) */}
-          <Route path="/login" element={<Login />} />
-          {/* ⭐ รองรับทั้ง /signup และ /register */}
-          <Route path="/signup" element={<SignUp />} />
-          <Route path="/register" element={<SignUp />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
-
-          {/* 404 → หน้าแรก */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <InnerApp />
       </ErrorBoundary>
     </BrowserRouter>
   );

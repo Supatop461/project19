@@ -212,45 +212,55 @@ router.get('/', nocache, async (req, res)  => {
     `;
 
     const { rows } = await db.query(sql, params);
-const total = rows.length ? Number(rows[0].__total) : 0;
+    const total = rows.length ? Number(rows[0].__total) : 0;
 
-const items = [];
-for (const r of rows) {
-  const stock = Number(r.stock ?? 0);
+    // ✅ อัปเดตสถานะตาม stock แบบปลอดภัย + อัปเดต DB เฉพาะเมื่อจำเป็น
+    const canUpdateStatusCol = await hasColumn('products', 'product_status_id');
+    const hasStatusTable     = await hasTable('product_statuses');
+    let outOfStockStatusId   = null;
 
-  // --- ตรวจสอบสถานะตาม stock ---
-  if (stock <= 0) {
-    // สินค้าหมด
-    r.product_status_name = 'สินค้าหมด';
-    // อัปเดตฐานข้อมูลให้ตรง
-    try {
-      await db.query(
-        `UPDATE products
-         SET product_status_id = (
-           SELECT product_status_id FROM product_statuses
-           WHERE status_name ILIKE 'สินค้าหมด' LIMIT 1
-         )
-         WHERE product_id = $1`,
-        [r.product_id]
-      );
-    } catch (e) {
-      console.warn('⚠ อัปเดตสถานะสินค้าเป็น "หมด" ไม่สำเร็จ:', e.message);
+    if (canUpdateStatusCol && hasStatusTable) {
+      const { rows: stRows } = await db.query(`
+        SELECT product_status_id
+        FROM product_statuses
+        WHERE status_name ILIKE 'สินค้าหมด'
+        ORDER BY product_status_id ASC
+        LIMIT 1
+      `);
+      outOfStockStatusId = stRows[0]?.product_status_id ?? null;
     }
-  } else if (stock > 0 && stock <= 5) {
-    // สต็อกใกล้หมด
-    r.product_status_name = 'สต็อกใกล้หมด';
 
-    // แจ้งเตือน (ตอนนี้แค่ console log, ถ้าอยากส่งอีเมล/แจ้งผ่าน dashboard ก็เพิ่มภายหลังได้)
-    console.warn(`⚠ สินค้าใกล้หมด: ${r.product_name} (เหลือ ${stock})`);
-  } else {
-    // พร้อมจำหน่าย
-    r.product_status_name = 'พร้อมจำหน่าย';
-  }
+    const items = [];
+    for (const r of rows) {
+      const stock = Number(r.stock ?? 0);
 
-  items.push(r);
-}
+      if (stock <= 0) {
+        r.product_status_name = 'สินค้าหมด';
 
-res.json({ items, total, page: pInt, page_size: psInt });
+        if (outOfStockStatusId != null && r.product_status_id !== outOfStockStatusId) {
+          try {
+            await db.query(
+              `UPDATE products
+               SET product_status_id = $2
+               WHERE product_id = $1`,
+              [r.product_id, outOfStockStatusId]
+            );
+            r.product_status_id = outOfStockStatusId; // sync value สำหรับ response
+          } catch (e) {
+            console.warn('⚠ อัปเดตสถานะ "สินค้าหมด" ไม่สำเร็จ:', e?.message || e);
+          }
+        }
+      } else if (stock > 0 && stock <= 5) {
+        r.product_status_name = 'สต็อกใกล้หมด';
+        console.warn(`⚠ สินค้าใกล้หมด: ${r.product_name} (เหลือ ${stock})`);
+      } else {
+        r.product_status_name = 'พร้อมจำหน่าย';
+      }
+
+      items.push(r);
+    }
+
+    return res.json({ items, total, page: pInt, page_size: psInt });
 
   } catch (error) {
     console.error('❌ ERROR: ดึงข้อมูลสินค้าไม่สำเร็จ:', error);
@@ -837,6 +847,6 @@ async function insertSingleImage(payload, res) {
   }
 }
 router.post('/product-images', async (req, res) => insertSingleImage(req.body, res));
-router.post('/../product-images', async (req, res) => insertSingleImage(req.body, res));
+// 🚫 ลบ path แปลก '/../product-images' ออก
 
 module.exports = router;

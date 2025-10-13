@@ -1,9 +1,10 @@
 // src/admin/VariantsManager.js
 // ======================================================================
-// จัดการ Variants
-// - ดึงชื่อสินค้าให้ได้แน่ (ลองหลาย endpoint)
-// - อัปโหลดภาพ/วิดีโอ แล้ว "แสดงผล" ด้วย URL เต็ม (prefix API_ORIGIN)
-// - พรีวิว/ลบสื่อได้ และบันทึกแถวได้เหมือนเดิม
+// Variants — แบบใช้งานง่าย: ใส่รายละเอียด 1–3 ช่อง, อัปโหลดสื่อ, ตั้งราคา/สต็อก, บันทึก
+// - คำสั้น ไม่เยิ่นเย้อ
+// - ตัด "เปิดขาย" ออก (is_active ไม่ให้ผู้ใช้ยุ่งในหน้านี้)
+// - พรีวิวสื่อด้วย URL เต็ม (prefix API_ORIGIN)
+// - ตารางแก้ไขแถว: คงเฉพาะที่จำเป็น (SKU/คอมโบ/ราคา/สต็อก/จัดการ)
 // ======================================================================
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -31,52 +32,46 @@ const basename = (u = "") => {
   }
 };
 
-// ตีความ baseURL ของ axios instance → origin ของ backend (เช่น http://localhost:3001)
+// baseURL → origin ของ backend
 const API_ORIGIN = (() => {
-  try {
-    return new URL(api?.defaults?.baseURL || "/", window.location.href).origin;
-  } catch {
-    return "";
-  }
+  try { return new URL(api?.defaults?.baseURL || "/", window.location.href).origin; }
+  catch { return ""; }
 })();
 
-// ทำ URL ให้ “ดูได้จริง” บนเบราเซอร์ (ยังเก็บค่าเดิมส่งกลับ backend ตามปกติ)
+// URL ให้ดูได้จริงบนเบราเซอร์
 const absMediaUrl = (u) => {
   if (!u) return u;
-  const s = String(u).replace(/\\/g, "/"); // กัน backslash
+  const s = String(u).replace(/\\/g, "/");
   if (/^https?:\/\//i.test(s)) return s;
   if (s.startsWith("/uploads")) return API_ORIGIN + s;
   if (s.startsWith("uploads/")) return API_ORIGIN + "/" + s;
-  // อื่น ๆ ให้คืนเดิม
   return s;
 };
 
 /* ================== SKU helpers ================== */
-const shortFromName = (name, fallback) => {
+const shortFromName = (name, fb) => {
   const cleaned = alnumUpper(name);
-  if (cleaned) return cleaned.slice(0, 3);
-  return fallback || "PRD";
+  return cleaned ? cleaned.slice(0, 3) : (fb || "PRD");
 };
 const shortFromOptionText = (text) => {
   if (!text) return "";
   let t = String(text).trim();
   const num = t.match(/(\d+(?:[.,]\d+)?)/)?.[1] || "";
   const unit = t.replace(num, "").trim().toLowerCase();
-  const normNum = num.replace(",", ".").replace(/\.0+$/, "");
+  const norm = num.replace(",", ".").replace(/\.0+$/, "");
   if (num) {
-    if (/ก|กรัม|g\b/.test(unit)) return `${normNum}G`;
-    if (/กก|กิโล|kg\b/.test(unit)) return `${normNum}KG`;
-    if (/ลิตร|liter|litre|l\b/.test(unit)) return `${normNum}L`;
-    if (/มล|ml\b/.test(unit)) return `${normNum}ML`;
-    if (/ซม|cm\b/.test(unit)) return `${normNum}CM`;
-    if (/มม|mm\b/.test(unit)) return `${normNum}MM`;
-    if (/นิ้ว|inch|in\b/.test(unit)) return `${normNum}IN`;
+    if (/ก|กรัม|g\b/.test(unit)) return `${norm}G`;
+    if (/กก|กิโล|kg\b/.test(unit)) return `${norm}KG`;
+    if (/ลิตร|liter|litre|l\b/.test(unit)) return `${norm}L`;
+    if (/มล|ml\b/.test(unit)) return `${norm}ML`;
+    if (/ซม|cm\b/.test(unit)) return `${norm}CM`;
+    if (/มม|mm\b/.test(unit)) return `${norm}MM`;
+    if (/นิ้ว|inch|in\b/.test(unit)) return `${norm}IN`;
   }
   return alnumUpper(t).slice(0, 6);
 };
 
 /* ================== Upload helpers ================== */
-// รองรับหลายพาธ/ฟิลด์ เพื่อให้เข้ากับ backend หลายแบบ
 const UPLOAD_PATHS = ["/upload", "/uploads", "/admin/upload", "/admin/uploads", "/images/upload"];
 const UPLOAD_FIELDS = ["file", "image", "photo"];
 
@@ -92,7 +87,7 @@ async function tryUpload(file) {
         const url =
           (typeof data === "string" && data) ||
           data?.url || data?.Location || data?.path || data?.imageUrl || data?.location || null;
-        if (url) return url; // เก็บ “raw url” ที่ backend ให้มา
+        if (url) return url;
       } catch (err) {
         const status = err?.response?.status;
         if (status === 404 || status === 400) continue;
@@ -116,9 +111,150 @@ const normalizeProduct = (raw) => {
   if (!raw) return null;
   if (Array.isArray(raw)) return raw[0] || null;
   const inner = raw.data || raw.product || raw.item || raw.result || null;
-  if (inner && typeof inner === "object") return inner;
-  return raw;
+  return (inner && typeof inner === "object") ? inner : raw;
 };
+
+/* ================== โหมดเร็ว: 1–3 รายการ → 1 Variant ================== */
+function QuickVariantForm({ productId, onDone }) {
+  const [rows, setRows] = useState([{ name: "", value: "" }]); // เริ่ม 1 แถว
+  const [sku, setSku] = useState("");
+  const [price, setPrice] = useState("");
+  const [stock, setStock] = useState(0);
+
+  const [images, setImages] = useState([]);
+  const [videos, setVideos] = useState([]);
+  const imgRef = useRef(null);
+  const vidRef = useRef(null);
+
+  const makeSku = () => {
+    const head = `P${productId}`;
+    const txt = (rows[0]?.value || rows[0]?.name || "").trim();
+    const shortTxt = shortFromOptionText(txt) || "OTR";
+    const tail = String(Math.floor(Math.random() * 9999)).padStart(4, "0");
+    return [head, shortTxt, tail].join("-");
+  };
+  const randomSku = () => setSku(makeSku());
+
+  const addRow = () => { if (rows.length < 3) setRows([...rows, { name: "", value: "" }]); };
+  const removeRow = (i) => {
+    const next = rows.slice(); next.splice(i, 1);
+    if (!next.length) next.push({ name: "", value: "" }); setRows(next);
+  };
+  const setRow = (i, field, v) => {
+    const next = rows.slice(); next[i] = { ...next[i], [field]: v }; setRows(next);
+  };
+
+  const onUploadImgs = async (files) => {
+    const arr = Array.from(files || []); if (!arr.length) return;
+    const urls = await uploadMany(arr); setImages((s) => [...s, ...urls]);
+  };
+  const onUploadVids = async (files) => {
+    const arr = Array.from(files || []); if (!arr.length) return;
+    const urls = await uploadMany(arr); setVideos((s) => [...s, ...urls]);
+  };
+
+  const submit = async () => {
+    const details = rows
+      .map((r) => ({ name: (r.name || "").trim(), value: (r.value || "").trim() }))
+      .filter((r) => r.name && r.value)
+      .slice(0, 3);
+
+    if (!details.length) { alert("กรอกอย่างน้อย 1 รายการ"); return; }
+
+    const payload = {
+      details,
+      sku: (sku || "").trim() || null,
+      price: price === "" ? null : Number(price),
+      stock: Number.isFinite(Number(stock)) ? Number(stock) : 0,
+      images, videos,
+    };
+
+    try {
+      await api.post(path(`/variants/products/${productId}/upsert-single`), payload, { headers: authHeader() });
+      onDone?.(); alert("บันทึกแล้ว");
+      // reset ต้องการค่อยเปิดใช้
+      // setRows([{ name: "", value: "" }]); setSku(""); setPrice(""); setStock(0); setImages([]); setVideos([]);
+    } catch (e) {
+      console.error(e);
+      alert(e?.response?.data?.error || "บันทึกไม่สำเร็จ");
+    }
+  };
+
+  return (
+    <section style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+      <h3 style={{ marginTop: 0 }}>เพิ่มเร็ว (1–3 รายการ)</h3>
+
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "center", marginBottom: 8 }}>
+          <input
+            placeholder={`ชื่อ #${i + 1} (เช่น ขนาด, สี)`}
+            value={r.name}
+            onChange={(e) => setRow(i, "name", e.target.value)}
+          />
+          <input
+            placeholder={`ค่า #${i + 1} (เช่น 150, แดง)`}
+            value={r.value}
+            onChange={(e) => setRow(i, "value", e.target.value)}
+          />
+          <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}>ลบ</button>
+        </div>
+      ))}
+
+      <div style={{ marginBottom: 12 }}>
+        <button type="button" onClick={addRow} disabled={rows.length >= 3}>+ เพิ่ม</button>
+        <span style={{ marginLeft: 8, color: "#667085" }}>สูงสุด 3 รายการ</span>
+      </div>
+
+      {/* สื่อ */}
+      <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+        <label style={{ fontWeight: 600 }}>สื่อ</label>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="file" accept="image/*" multiple ref={imgRef} style={{ display: "none" }}
+              onChange={async (e) => { try { await onUploadImgs(e.target.files); } finally { e.target.value = ""; }}} />
+            <button type="button" onClick={() => imgRef.current?.click()}>เลือกรูป…</button>
+            <small style={{ color: "#6b6b6b" }}>(อัปโหลดพร้อมบันทึก)</small>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="file" accept="video/*" multiple ref={vidRef} style={{ display: "none" }}
+              onChange={async (e) => { try { await onUploadVids(e.target.files); } finally { e.target.value = ""; }}} />
+            <button type="button" onClick={() => vidRef.current?.click()}>เลือกวิดีโอ…</button>
+          </div>
+        </div>
+
+        {(images.length > 0 || videos.length > 0) && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {images.map((u, i) => (
+              <span key={"img"+i} style={{ border: "1px solid #e5e7eb", borderRadius: 999, padding: "4px 8px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                🖼️ {basename(u)} <button onClick={() => setImages((s)=>s.filter((_,idx)=>idx!==i))}>✕</button>
+              </span>
+            ))}
+            {videos.map((u, i) => (
+              <span key={"vid"+i} style={{ border: "1px solid #e5e7eb", borderRadius: 999, padding: "4px 8px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                🎞️ {basename(u)} <button onClick={() => setVideos((s)=>s.filter((_,idx)=>idx!==i))}>✕</button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* SKU + ราคา + สต็อก */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.8fr", gap: 12, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input placeholder="SKU (เว้นว่างได้)" value={sku} onChange={(e) => setSku(e.target.value)} />
+          <button type="button" onClick={randomSku}>สุ่ม SKU</button>
+        </div>
+        <input placeholder="ราคา" type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} />
+        <input placeholder="สต็อก" type="number" min={0} value={stock} onChange={(e) => setStock(e.target.value)} />
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <button type="button" onClick={submit} style={{ fontWeight: 700 }}>บันทึก</button>
+      </div>
+    </section>
+  );
+}
+
 
 /* ================== component ================== */
 export default function VariantsManager() {
@@ -136,8 +272,7 @@ export default function VariantsManager() {
 
   const [draft, setDraft] = useState({
     sku: "", price: "", stock_qty: "",
-    images: [], videos: [],
-    values: {}, textInputs: {},
+    images: [], videos: [], values: {}, textInputs: {},
   });
 
   const [skuPrefix, setSkuPrefix] = useState(`P${productId}`);
@@ -147,60 +282,43 @@ export default function VariantsManager() {
   const addImageRef = useRef(null);
   const addVideoRef = useRef(null);
 
-  const boom = useCallback((e, fallback = "เกิดข้อผิดพลาด") => {
-    const msg =
+  const boom = useCallback((e, fb = "มีข้อผิดพลาด") => {
+    const m =
       e?.response?.data?.message ||
       e?.response?.data?.error ||
       (e?.message === "UPLOAD_ENDPOINT_NOT_FOUND"
-        ? "ไม่พบ endpoint อัปโหลด (ลอง /upload หรือ /uploads ในฝั่ง backend)"
+        ? "ไม่พบจุดอัปโหลด (ลอง /upload หรือ /uploads ที่ backend)"
         : e?.message) ||
-      fallback;
-    setError(msg);
-    console.error(fallback, e);
+      fb;
+    setError(m);
+    console.error(fb, e);
   }, []);
 
-  /* ---------- โหลดข้อมูลหลัก (พยายามดึงชื่อสินค้าให้ได้เสมอ) ---------- */
+  /* ---------- โหลดข้อมูล ---------- */
+  const normalizeProductWrap = (raw) => normalizeProduct(raw);
   const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    setMsg("");
+    setLoading(true); setError(""); setMsg("");
     try {
-      // 1) product (ลองหลาย endpoint)
+      // product (ลองหลาย endpoint)
       let prod = null;
-      try {
-        const r = await api.get(path(`/admin/products/${productId}`));
-        prod = normalizeProduct(r?.data);
-      } catch { }
-      if (!prod) {
-        try {
-          const r = await api.get(path(`/products/${productId}`));
-          prod = normalizeProduct(r?.data);
-        } catch { }
-      }
+      try { prod = normalizeProductWrap((await api.get(path(`/admin/products/${productId}`)))?.data); } catch {}
+      if (!prod) { try { prod = normalizeProductWrap((await api.get(path(`/products/${productId}`)))?.data); } catch {} }
       if (!prod) {
         try {
           const r = await api.get(path(`/admin/products`), { params: { include_archived: 1 } });
           const arr = Array.isArray(r?.data?.items) ? r.data.items : (Array.isArray(r?.data) ? r.data : []);
           prod = (arr || []).find((x) => Number(x.product_id) === productId) || null;
-        } catch { }
+        } catch {}
       }
       setProduct(prod);
 
-      // 2) options / variants (ถ้าไม่เจอ endpoint ใด ให้เป็น [] แทน)
-      let opts = [];
-      let vars = [];
-      try {
-        const r1 = await api.get(path(`/variants/products/${productId}/options`));
-        opts = Array.isArray(r1?.data) ? r1.data : [];
-      } catch { }
-      try {
-        const r2 = await api.get(path(`/variants/product/${productId}?active=1`));
-        vars = Array.isArray(r2?.data) ? r2.data : [];
-      } catch { }
-      setOptions(opts);
-      setVariants(vars);
+      // options / variants
+      let opts = [], vars = [];
+      try { const r1 = await api.get(path(`/variants/products/${productId}/options`)); opts = Array.isArray(r1?.data) ? r1.data : []; } catch {}
+      try { const r2 = await api.get(path(`/variants/product/${productId}?active=1`)); vars = Array.isArray(r2?.data) ? r2.data : []; } catch {}
+      setOptions(opts); setVariants(vars);
     } catch (e) {
-      boom(e, "โหลดข้อมูลไม่สำเร็จ");
+      boom(e, "โหลดไม่สำเร็จ");
     } finally {
       setLoading(false);
     }
@@ -210,15 +328,11 @@ export default function VariantsManager() {
 
   /* ---------- maps/labels ---------- */
   const optIndexById = useMemo(() => {
-    const m = new Map();
-    options.forEach((o, i) => m.set(o.option_id, i));
-    return m;
+    const m = new Map(); options.forEach((o, i) => m.set(o.option_id, i)); return m;
   }, [options]);
 
   const valNameById = useMemo(() => {
-    const m = new Map();
-    options.forEach((o) => (o.values || []).forEach((v) => m.set(v.value_id, v.value_name)));
-    return m;
+    const m = new Map(); options.forEach((o) => (o.values || []).forEach((v) => m.set(v.value_id, v.value_name))); return m;
   }, [options]);
 
   const comboText = useCallback((row) => {
@@ -226,13 +340,12 @@ export default function VariantsManager() {
     if (!list.length) return "—";
     return list.map((c) => {
       const idx = optIndexById.get(c.option_id) ?? 0;
-      return `รายละเอียดที่ ${idx + 1}: ${valNameById.get(c.value_id) ?? c.value_id}`;
-    }).join(" ・ ");
+      return `รายละเอียด ${idx + 1}: ${valNameById.get(c.value_id) ?? c.value_id}`;
+    }).join(" • ");
   }, [optIndexById, valNameById]);
 
   /* ---------- SKU suggestion ---------- */
   const buildSkuSuggestion = useCallback(() => {
-    const prefix = "P";
     const pidPart = String(productId);
     const prodCodeRaw = product?.code || product?.product_code || product?.sku_prefix || product?.product_name || product?.name || "";
     const prodCode = shortFromName(prodCodeRaw, `PD${pidPart}`).padEnd(3, "X");
@@ -249,7 +362,7 @@ export default function VariantsManager() {
       }
     }
     const tail = rand2();
-    const parts = [prefix + pidPart, prodCode];
+    const parts = [`P${pidPart}`, prodCode];
     if (valueShort) parts.push(valueShort);
     parts.push(tail);
     return parts.filter(Boolean).join("-");
@@ -259,18 +372,12 @@ export default function VariantsManager() {
   const chooseOrCreateValue = useCallback(async (option, typed) => {
     const text = (typed || "").trim();
     const oid = option.option_id;
-
     setDraft((s) => ({ ...s, textInputs: { ...s.textInputs, [oid]: text } }));
 
-    if (!text) {
-      setDraft((s) => ({ ...s, values: { ...s.values, [oid]: "" } }));
-      return;
-    }
+    if (!text) { setDraft((s) => ({ ...s, values: { ...s.values, [oid]: "" } })); return; }
     const exists = (option.values || []).find((v) => (v.value_name || "").toLowerCase() === text.toLowerCase());
-    if (exists) {
-      setDraft((s) => ({ ...s, values: { ...s.values, [oid]: exists.value_id } }));
-      return;
-    }
+    if (exists) { setDraft((s) => ({ ...s, values: { ...s.values, [oid]: exists.value_id } })); return; }
+
     try {
       await api.post(path(`/variants/options/${oid}/values`), { value_name: text }, { headers: authHeader() });
       await load();
@@ -279,9 +386,7 @@ export default function VariantsManager() {
         const value_id = found[0];
         setDraft((s) => ({ ...s, values: { ...s.values, [oid]: value_id }, textInputs: { ...s.textInputs, [oid]: text } }));
       }
-    } catch (e) {
-      boom(e, "เพิ่มค่าใหม่ไม่สำเร็จ");
-    }
+    } catch (e) { boom(e, "เพิ่มค่าไม่สำเร็จ"); }
   }, [boom, load, valNameById]);
 
   /* ---------- actions: create/update/delete ---------- */
@@ -301,15 +406,15 @@ export default function VariantsManager() {
         image_url: draft.images[0] || null,
         images: draft.images,
         videos: draft.videos,
-        is_active: true,
+        is_active: true, // ตรึงให้เปิดขายเสมอในทาง backend
         option_values,
       }, { headers: authHeader() });
 
       setDraft({ sku: "", price: "", stock_qty: "", images: [], videos: [], values: {}, textInputs: {} });
       await load();
-      setMsg("บันทึก Variant สำเร็จ");
+      setMsg("บันทึกแล้ว");
     } catch (e) {
-      boom(e, "บันทึก Variant ไม่สำเร็จ");
+      boom(e, "บันทึกไม่สำเร็จ");
     } finally {
       setBusy(false);
     }
@@ -322,32 +427,25 @@ export default function VariantsManager() {
       if ("price" in patch) body.price = patch.price === "" ? null : Math.max(0, Number(patch.price || 0));
       if ("stock_qty" in patch) body.stock_qty = Math.max(0, Number(patch.stock_qty || 0));
       if ("sku" in patch) body.sku = patch.sku?.trim() || buildSkuSuggestion();
-      if ("is_active" in patch) body.is_active = !!patch.is_active;
       if ("images" in patch) { body.image_url = patch.images?.[0] || null; body.images = patch.images; }
       if ("videos" in patch) { body.videos = patch.videos; }
 
       await api.put(path(`/variants/${variant_id}`), body, { headers: authHeader() });
       await load();
-      setMsg("อัปเดต Variant สำเร็จ");
+      setMsg("บันทึกแล้ว");
     } catch (e) {
-      boom(e, "อัปเดต Variant ไม่สำเร็จ");
+      boom(e, "อัปเดตไม่สำเร็จ");
     } finally {
       setBusy(false);
     }
   }, [boom, load, buildSkuSuggestion]);
 
   const deleteVariant = useCallback(async (variant_id) => {
-    if (!window.confirm("ลบ Variant นี้?")) return;
+    if (!window.confirm("ลบรายการนี้?")) return;
     setBusy(true);
-    try {
-      await api.delete(path(`/variants/${variant_id}`), { headers: authHeader() });
-      await load();
-      setMsg("ลบ Variant สำเร็จ");
-    } catch (e) {
-      boom(e, "ลบ Variant ไม่สำเร็จ");
-    } finally {
-      setBusy(false);
-    }
+    try { await api.delete(path(`/variants/${variant_id}`), { headers: authHeader() }); await load(); setMsg("ลบแล้ว"); }
+    catch (e) { boom(e, "ลบไม่สำเร็จ"); }
+    finally { setBusy(false); }
   }, [boom, load]);
 
   const generateCombos = useCallback(async () => {
@@ -359,16 +457,13 @@ export default function VariantsManager() {
         stock_qty: Math.max(0, Number(genStock || 0)),
       }, { headers: authHeader() });
       await load();
-      setMsg("สร้างคอมบิเนชันสำเร็จ");
-    } catch (e) {
-      boom(e, "สร้างคอมบิเนชันไม่สำเร็จ");
-    } finally {
-      setBusy(false);
-    }
+      setMsg("สร้างแล้ว");
+    } catch (e) { boom(e, "สร้างไม่สำเร็จ"); }
+    finally { setBusy(false); }
   }, [productId, skuPrefix, genPrice, genStock, boom, load]);
 
   /* ================== render ================== */
-  if (loading) return <div style={{ padding: 16 }}>กำลังโหลด...</div>;
+  if (loading) return <div style={{ padding: 16 }}>กำลังโหลด…</div>;
 
   const productName = firstNonEmpty(
     product?.product_name, product?.name, product?.product_title, product?.title,
@@ -386,7 +481,7 @@ export default function VariantsManager() {
           </span>
           <span style={{ marginLeft: 10, color: "#065f46", fontWeight: 800, fontSize: 18 }}>· {productCode}</span>
         </h2>
-        <Link to="/admin" style={{ marginLeft: "auto" }}>← กลับแอดมิน</Link>
+        <Link to="/admin" style={{ marginLeft: "auto" }}>← กลับ</Link>
       </div>
 
       {(error || msg) && (
@@ -396,62 +491,54 @@ export default function VariantsManager() {
         </div>
       )}
 
-      {/* เพิ่ม Variant รายตัว */}
+      {/* เพิ่มเร็ว */}
+      <QuickVariantForm productId={productId} onDone={load} />
+
+      {/* เพิ่มแบบ/ตัวเลือก (เต็ม) */}
       <section style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-        <h3>เพิ่มแบบ/ตัวเลือกสินค้า (Variant)</h3>
+        <h3 style={{ marginTop: 0 }}>เพิ่มแบบ/ตัวเลือก</h3>
 
         <div style={{ display: "grid", gap: 10, maxWidth: 860 }}>
           {/* SKU */}
           <div style={{ display: "grid", gap: 6 }}>
-            <label style={{ color: "#6b7280", fontSize: 13 }}>SKU (เช่น P30-PCH-500G)</label>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <input
-                placeholder="SKU (ปล่อยว่างให้ระบบเติมอัตโนมัติได้)"
+                placeholder="SKU (เว้นว่างให้สุ่มได้)"
                 value={draft.sku}
                 onChange={(e) => setDraft((s) => ({ ...s, sku: e.target.value }))}
                 disabled={busy}
                 style={{ flex: "1 1 280px" }}
               />
               <button type="button" onClick={() => setDraft((s) => ({ ...s, sku: buildSkuSuggestion() }))} disabled={busy}>
-                เติม SKU อัตโนมัติ
+                สุ่ม SKU
               </button>
             </div>
-            <small style={{ color: "#6b6b6b" }}>
-              ระบบจะสร้างจาก: P + รหัสสินค้า + ค่าตัวเลือก + เลขสุ่ม เช่น P{productId}-PCH-500G-07
-            </small>
+            <small style={{ color: "#6b6b6b" }}>โครง: P+รหัสสินค้า+ค่าตัวเลือก+เลขสุ่ม เช่น P{productId}-PCH-500G-07</small>
           </div>
 
-          {/* สื่อของแบบ/ตัวเลือก */}
+          {/* สื่อ */}
           <div style={{ display: "grid", gap: 8 }}>
-            <label style={{ fontWeight: 600 }}>สื่อของแบบ/ตัวเลือก</label>
+            <label style={{ fontWeight: 600 }}>สื่อ</label>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {/* รูป */}
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button type="button" onClick={() => addImageRef.current?.click()} disabled={busy}>เลือกรูป…</button>
-                <small style={{ color: "#6b6b6b" }}>(สูงสุด {MAX_VARIANT_IMAGES} รูป)</small>
+                <small style={{ color: "#6b6b6b" }}>(สูงสุด {MAX_VARIANT_IMAGES})</small>
                 <input
                   type="file" accept="image/*" ref={addImageRef} multiple style={{ display: "none" }}
                   onChange={async (e) => {
-                    const files = Array.from(e.target.files || []);
-                    if (!files.length) return;
-                    if (files.some((f) => !f.type.startsWith("image/"))) {
-                      setError("อนุญาตเฉพาะไฟล์รูปภาพ");
-                      e.target.value = ""; return;
-                    }
+                    const files = Array.from(e.target.files || []); if (!files.length) return;
+                    if (files.some((f) => !f.type.startsWith("image/"))) { setError("อนุญาตเฉพาะรูปภาพ"); e.target.value = ""; return; }
                     setBusy(true);
                     try {
                       const remain = Math.max(0, MAX_VARIANT_IMAGES - draft.images.length);
                       const slice = files.slice(0, remain);
                       const urls = await uploadMany(slice);
                       setDraft((s) => ({ ...s, images: [...s.images, ...urls] }));
-                      setMsg("อัปโหลดรูปสำเร็จ");
-                    } catch (err) {
-                      boom(err, "อัปโหลดรูปไม่สำเร็จ");
-                    } finally {
-                      setBusy(false);
-                      e.target.value = "";
-                    }
+                      setMsg("อัปโหลดรูปแล้ว");
+                    } catch (err) { boom(err, "อัปโหลดรูปไม่สำเร็จ"); }
+                    finally { setBusy(false); e.target.value = ""; }
                   }}
                 />
               </div>
@@ -459,34 +546,28 @@ export default function VariantsManager() {
               {/* วิดีโอ */}
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button type="button" onClick={() => addVideoRef.current?.click()} disabled={busy}>เลือกวิดีโอ…</button>
-                <small style={{ color: "#6b6b6b" }}>(สูงสุด {MAX_VARIANT_VIDEOS} ไฟล์)</small>
+                <small style={{ color: "#6b6b6b" }}>(สูงสุด {MAX_VARIANT_VIDEOS})</small>
                 <input
                   type="file" accept="video/*" ref={addVideoRef} multiple style={{ display: "none" }}
                   onChange={async (e) => {
-                    const files = Array.from(e.target.files || []);
-                    if (!files.length) return;
+                    const files = Array.from(e.target.files || []); if (!files.length) return;
                     setBusy(true);
                     try {
                       const remain = Math.max(0, MAX_VARIANT_VIDEOS - draft.videos.length);
                       const slice = files.slice(0, remain);
                       const urls = await uploadMany(slice);
                       setDraft((s) => ({ ...s, videos: [...s.videos, ...urls] }));
-                      setMsg("อัปโหลดวิดีโอสำเร็จ");
-                    } catch (err) {
-                      boom(err, "อัปโหลดวิดีโอไม่สำเร็จ");
-                    } finally {
-                      setBusy(false);
-                      e.target.value = "";
-                    }
+                      setMsg("อัปโหลดวิดีโอแล้ว");
+                    } catch (err) { boom(err, "อัปโหลดวิดีโอไม่สำเร็จ"); }
+                    finally { setBusy(false); e.target.value = ""; }
                   }}
                 />
               </div>
             </div>
 
-            {/* รายการสื่อ (ชื่อไฟล์) */}
+            {/* รายการสื่อ */}
             {(draft.images.length > 0 || draft.videos.length > 0) && (
               <div style={{ display: "grid", gap: 6 }}>
-                <div style={{ fontSize: 13, color: "#4b5563" }}>รายการสื่อที่เพิ่มแล้ว</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {draft.images.map((u, i) => (
                     <span key={"img" + i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", border: "1px solid #e5e7eb", borderRadius: 999 }}>
@@ -544,10 +625,10 @@ export default function VariantsManager() {
         <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
           {options.map((opt, idx) => (
             <div key={opt.option_id} style={{ display: "grid", gap: 6 }}>
-              <label style={{ fontWeight: 600 }}>รายละเอียดที่ {idx + 1}</label>
+              <label style={{ fontWeight: 600 }}>รายละเอียด {idx + 1}</label>
               <input
                 list={`opt-${opt.option_id}-list`}
-                placeholder="พิมพ์ค่า (เช่น แบบซอง / 500 กรัม / สีแดง) หรือเลือกจากลิสต์ แล้วกด Enter/คลิกออก"
+                placeholder="พิมพ์หรือเลือกแล้วกด Enter/คลิกออก"
                 value={draft.textInputs[opt.option_id] ?? ""}
                 onChange={(e) => setDraft((s) => ({ ...s, textInputs: { ...s.textInputs, [opt.option_id]: e.target.value } }))}
                 onBlur={(e) => chooseOrCreateValue(opt, e.target.value)}
@@ -557,36 +638,36 @@ export default function VariantsManager() {
               <datalist id={`opt-${opt.option_id}-list`}>
                 {(opt.values || []).map((v) => <option key={v.value_id} value={v.value_name} />)}
               </datalist>
-              <small style={{ color: "#666" }}>ปล่อยว่างได้ • ถ้าพิมพ์ค่าใหม่ ระบบจะสร้างให้อัตโนมัติ</small>
+              <small style={{ color: "#666" }}>ว่างได้ • ถ้าเป็นค่าใหม่ ระบบจะสร้างให้</small>
             </div>
           ))}
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-          <input type="number" min={0} placeholder="ราคาเฉพาะแบบ/ตัวเลือก" value={draft.price} onChange={(e) => setDraft((s) => ({ ...s, price: e.target.value }))} disabled={busy} style={{ maxWidth: 220 }} />
+          <input type="number" min={0} placeholder="ราคา" value={draft.price} onChange={(e) => setDraft((s) => ({ ...s, price: e.target.value }))} disabled={busy} style={{ maxWidth: 220 }} />
           <input type="number" min={0} placeholder="สต็อก" value={draft.stock_qty} onChange={(e) => setDraft((s) => ({ ...s, stock_qty: e.target.value }))} disabled={busy} style={{ maxWidth: 140 }} />
-          <button onClick={createVariant} disabled={busy} style={{ fontWeight: 700 }}>บันทึกแบบ/ตัวเลือกนี้</button>
+          <button onClick={createVariant} disabled={busy} style={{ fontWeight: 700 }}>บันทึก</button>
         </div>
       </section>
 
-      {/* generate ทั้งหมด */}
+      {/* สร้างทั้งหมด */}
       <section style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-        <h3>สร้างแบบ/ตัวเลือกทั้งหมด (ทุกคอมบิเนชันที่มี)</h3>
+        <h3 style={{ marginTop: 0 }}>สร้างทั้งหมด</h3>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <label>SKU prefix</label>
           <input value={skuPrefix} onChange={(e) => setSkuPrefix(e.target.value)} disabled={busy} />
-          <label>ราคาเริ่มต้น</label>
+          <label>ราคาเริ่ม</label>
           <input type="number" min={0} value={genPrice} onChange={(e) => setGenPrice(e.target.value)} disabled={busy} style={{ maxWidth: 160 }} />
-          <label>สต็อกเริ่มต้น</label>
+          <label>สต็อกเริ่ม</label>
           <input type="number" min={0} value={genStock} onChange={(e) => setGenStock(e.target.value)} disabled={busy} style={{ maxWidth: 160 }} />
-          <button onClick={generateCombos} disabled={busy}>สร้างคอมบิเนชัน</button>
+          <button onClick={generateCombos} disabled={busy}>สร้าง</button>
         </div>
-        <div style={{ color: "#6b6b6b", marginTop: 6, fontSize: 14 }}>ระบบจะข้ามรายการที่ซ้ำ</div>
+        <div style={{ color: "#6b6b6b", marginTop: 6, fontSize: 14 }}>ข้ามรายการที่ซ้ำ</div>
       </section>
 
       {/* ตาราง */}
       <section style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-        <h3>รายการแบบ/ตัวเลือก (Variants)</h3>
+        <h3 style={{ marginTop: 0 }}>รายการแบบ/ตัวเลือก</h3>
         <VariantsTable rows={variants} comboText={comboText} onSave={updateVariant} onDelete={deleteVariant} busy={busy} />
       </section>
     </div>
@@ -605,13 +686,12 @@ function VariantsTable({ rows, comboText, onSave, onDelete, busy }) {
           <th align="left">คอมโบ</th>
           <th align="right">ราคา</th>
           <th align="right">สต็อก</th>
-          <th>สถานะ</th>
           <th>จัดการ</th>
         </tr>
       </thead>
       <tbody>
         {rows.length === 0 && (
-          <tr><td colSpan={8} align="center"><em>ยังไม่มี Variant</em></td></tr>
+          <tr><td colSpan={7} align="center"><em>ยังไม่มี Variant</em></td></tr>
         )}
         {rows.map((r, i) => (
           <VariantRow key={r.variant_id} idx={i + 1} row={r} comboText={comboText} onSave={onSave} onDelete={onDelete} busy={busy} />
@@ -625,7 +705,6 @@ function VariantRow({ idx, row, comboText, onSave, onDelete, busy }) {
   const [sku, setSku] = useState(row.sku || "");
   const [price, setPrice] = useState(row.final_price ?? row.price ?? "");
   const [stock, setStock] = useState(row.stock ?? row.stock_qty ?? 0);
-  const [active, setActive] = useState(row.is_active ?? true);
 
   const initImages = row.images || row.image_urls || (row.image_url ? [row.image_url] : []);
   const initVideos = row.videos || row.video_urls || [];
@@ -682,36 +761,30 @@ function VariantRow({ idx, row, comboText, onSave, onDelete, busy }) {
             <input
               type="file" accept="image/*" ref={imgFileRef} multiple style={{ display: "none" }}
               onChange={async (e) => {
-                const files = Array.from(e.target.files || []);
-                if (!files.length) return;
+                const files = Array.from(e.target.files || []); if (!files.length) return;
                 try {
                   const remain = Math.max(0, MAX_VARIANT_IMAGES - images.length);
                   const slice = files.slice(0, remain);
                   const urls = await uploadMany(slice);
                   setImages((prev) => [...prev, ...urls]);
-                } finally {
-                  e.target.value = "";
-                }
+                } finally { e.target.value = ""; }
               }}
             />
-            <button type="button" onClick={() => imgFileRef.current?.click()} disabled={busy}>อัปโหลดรูปเพิ่ม…</button>
+            <button type="button" onClick={() => imgFileRef.current?.click()} disabled={busy}>อัปโหลดรูป…</button>
 
             <input
               type="file" accept="video/*" ref={vidFileRef} multiple style={{ display: "none" }}
               onChange={async (e) => {
-                const files = Array.from(e.target.files || []);
-                if (!files.length) return;
+                const files = Array.from(e.target.files || []); if (!files.length) return;
                 try {
                   const remain = Math.max(0, MAX_VARIANT_VIDEOS - videos.length);
                   const slice = files.slice(0, remain);
                   const urls = await uploadMany(slice);
                   setVideos((prev) => [...prev, ...urls]);
-                } finally {
-                  e.target.value = "";
-                }
+                } finally { e.target.value = ""; }
               }}
             />
-            <button type="button" onClick={() => vidFileRef.current?.click()} disabled={busy}>อัปโหลดวิดีโอเพิ่ม…</button>
+            <button type="button" onClick={() => vidFileRef.current?.click()} disabled={busy}>อัปโหลดวิดีโอ…</button>
           </div>
         </div>
       </td>
@@ -721,13 +794,8 @@ function VariantRow({ idx, row, comboText, onSave, onDelete, busy }) {
       <td align="right"><input type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} style={{ width: 120, textAlign: "right" }} /></td>
       <td align="right"><input type="number" min={0} value={stock} onChange={(e) => setStock(e.target.value)} style={{ width: 100, textAlign: "right" }} /></td>
       <td>
-        <label style={{ fontSize: 13 }}>
-          <input type="checkbox" checked={!!active} onChange={(e) => setActive(e.target.checked)} /> แสดง
-        </label>
-      </td>
-      <td>
-        <button onClick={() => onSave(row.variant_id, { sku, price, stock_qty: stock, is_active: active, images, videos })} disabled={busy} style={{ fontWeight: 700 }}>
-          บันทึกแถวนี้
+        <button onClick={() => onSave(row.variant_id, { sku, price, stock_qty: stock, images, videos })} disabled={busy} style={{ fontWeight: 700 }}>
+          บันทึก
         </button>
         <button onClick={() => onDelete(row.variant_id)} disabled={busy} style={{ marginLeft: 8 }}>
           ลบ

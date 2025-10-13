@@ -1,0 +1,130 @@
+/* Footer.css — Full-width modern, clear green (Font ++1) */
+@import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css");
+
+/* ===== Palette ===== */
+:root {
+  --bg-outer: #e8f5e9;
+  --panel: #ffffff;
+  --ink: #15321c;
+  --muted: #3d5342;
+  --brand: #2e7d32;
+  --brand-600: #256c29;
+  --border: #cce3cd;
+}
+
+/* ===== Base ===== */
+.site-footer {
+  width: 100%;
+  background: var(--bg-outer);
+  color: var(--ink);
+  padding: 24px 0 12px;
+  border-top: 3px solid var(--brand);
+  font-size: 14px;         /* ↑ จาก 13px */
+  line-height: 1.6;        /* อ่านสบายขึ้นนิด */
+}
+
+/* ===== Layout ===== */
+.footer-top {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 14px 18px 8px;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr 0.9fr;
+  gap: 20px;
+}
+
+/* ===== Brand/About ===== */
+.footer-brand h2 {
+  margin: 0 0 6px;
+  font-size: 20px;         /* ↑ จาก 18px */
+  color: var(--brand-600);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+.footer-brand p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;         /* ↑ จาก 13px */
+  line-height: 1.55;
+}
+
+/* ===== Titles ===== */
+.footer-links h3,
+.footer-help h3,
+.footer-branches h3 {
+  margin: 0 0 8px;
+  color: var(--brand-600);
+  font-weight: 700;
+  font-size: 15px;         /* ↑ จาก 13.5px */
+}
+
+/* ===== Menus ===== */
+.footer-links ul,
+.footer-help ul { list-style: none; margin: 0; padding: 0; }
+
+.footer-links li,
+.footer-help li { margin: 4px 0; }
+
+.footer-links a,
+.footer-help a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.2s ease, border-color 0.2s ease;
+  font-size: 14px;         /* ↑ จาก 13px */
+}
+.footer-links a:hover,
+.footer-help a:hover { color: var(--brand); border-color: var(--brand); }
+
+.footer-help .contact-link { color: var(--brand); font-weight: 600; }
+
+/* ===== Branches ===== */
+.footer-branches { grid-column: 1 / -1; margin-top: 6px; }
+.footer-branches ul {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;
+}
+.footer-branches .branch {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px;
+  box-shadow: 0 2px 6px rgba(17, 48, 30, 0.05);
+}
+.branch-name { color: var(--brand-600); font-weight: 700; font-size: 14px; margin-bottom: 2px; }  /* ↑ */
+.branch-line { color: var(--ink); font-size: 13.5px; margin: 2px 0; }                           /* ↑ */
+.branch a { color: var(--brand-600); text-decoration: none; }
+.branch a:hover { text-decoration: underline; }
+.branch-actions { font-size: 13px; margin-top: 2px; color: var(--muted); }                      /* ↑ */
+
+/* ===== Social ===== */
+.footer-social {
+  width: 100%;
+  display: flex; justify-content: center; gap: 10px;
+  margin: 14px 0 6px;
+}
+.footer-social a {
+  width: 30px; height: 30px;               /* คงพอดีมือ */
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  color: var(--brand-600); background: #fff; border: 1.2px solid var(--brand-600);
+  font-size: 13.5px;                        /* ↑ จาก 12.5px */
+  transition: all 0.2s ease;
+}
+.footer-social a:hover { background: var(--brand-600); color: #fff; transform: translateY(-1px); }
+
+/* ===== Bottom ===== */
+.footer-bottom {
+  width: 100%;
+  text-align: center;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--border); color: var(--muted);
+  font-size: 13px;            /* ↑ จาก 12.5px */
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  .footer-top { grid-template-columns: 1fr 1fr; }
+  .footer-brand { grid-column: 1 / -1; }
+}
+@media (max-width: 640px) {
+  .footer-top { grid-template-columns: 1fr; padding: 12px; }
+  .footer-branches ul { grid-template-columns: 1fr; }
+}

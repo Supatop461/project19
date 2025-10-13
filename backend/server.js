@@ -122,6 +122,7 @@ const publicUnitsRouter    = tryRequire('./routes/publicUnits');    // ✅
 const sizeUnitsRouter      = tryRequire('./routes/sizeUnits');
 const adminSizeUnitsRouter = tryRequire('./routes/adminSizeUnits');
 const meRoutes             = tryRequire('./routes/me');
+const adminUsersRouter     = tryRequire('./routes/adminUsers');     // 🔧 NEW: admin user roles
 
 /* ───────────── public mounts ───────────── */
 mount('auth',            ['/api/auth', '/auth'], authRoutes);
@@ -140,6 +141,7 @@ mount('adminProducts',   ['/api/admin/products','/admin/products'], adminProduct
 mount('adminVariants',   ['/api/admin/variants','/admin/variants'], adminVariantsRoutes, requireAuth, requireRole(['admin']));
 mount('adminSubcats',    ['/api/admin/subcategories','/admin/subcategories'], adminSubcatRoutes, requireAuth, requireRole(['admin']));
 mount('productStatus',   ['/api/product-status','/product-status'], productStatusRoutes, requireAuth, requireRole(['admin']));
+mount('adminUsers',      '/api', adminUsersRouter, requireAuth, requireRole(['admin'])); // 🔧 NEW: exposes /api/admin/users*
 
 /* ───────────── uploads/images guard ───────────── */
 function pathStartsWith(p, prefix) { return p === prefix || p.startsWith(prefix + '/'); }

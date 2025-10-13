@@ -18,12 +18,24 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/* ---------- Tiny Toast (in-file, no extra libs) ---------- */
+function useToasts() {
+  const [toasts, setToasts] = useState([]);
+  const push = (msg, type = 'info') => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((xs) => [...xs, { id, msg, type }]);
+    setTimeout(() => setToasts((xs) => xs.filter(t => t.id !== id)), 3000);
+  };
+  const remove = (id) => setToasts((xs) => xs.filter(t => t.id !== id));
+  return { toasts, push, remove };
+}
+
 export default function ProductManagement() {
   const [products, setProducts] = useState([]);
   const [statuses, setStatuses] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  /* ---------- new: filters/ui states ---------- */
+  /* ---------- filters/ui states ---------- */
   const [showArchived, setShowArchived] = useState(false);
   const [visibilityFilter, setVisibilityFilter] = useState('all'); // all|shown|hidden
   const [query, setQuery] = useState('');
@@ -33,7 +45,10 @@ export default function ProductManagement() {
   const [perPage, setPerPage] = useState(20); // 10/20/50/100/0(all)
   const [page, setPage] = useState(1);
 
-  // ✅ ดึง lookups จากฐานข้อมูล
+  // ✅ กรองตามสต็อก + สรุปจำนวนใกล้หมด/หมด
+  const [stockFilter, setStockFilter] = useState('all'); // all | low | out
+
+  // ✅ lookups
   const { data: lookups, loading: lkLoading, error: lkError, reload: reloadLookups } =
     useLookups({ published: true });
 
@@ -42,7 +57,7 @@ export default function ProductManagement() {
   const [isEditing, setIsEditing] = useState(false);
   const [editProductId, setEditProductId] = useState(null);
 
-  // ✅ ฟอร์มใช้ price (จำนวนเต็ม) แทน selling_price
+  // ✅ ฟอร์มใช้ price (จำนวนเต็ม)
   const [form, setForm] = useState({
     product_name: '',
     description: '',
@@ -56,12 +71,19 @@ export default function ProductManagement() {
     product_status_id: ''
   });
 
+  // ✨ refs
   const catRef = useRef(null);
+  const formTopRef = useRef(null);
+  const nameInputRef = useRef(null);
+
+  // Toasts
+  const { toasts, push, remove } = useToasts();
 
   /* ---------- API helpers ---------- */
   const handleApiError = (err, fallback = 'เกิดข้อผิดพลาด') => {
     console.error(fallback, err?.response?.data || err?.message || err);
-    alert(err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback);
+    const msg = err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback;
+    push(`❌ ${msg}`, 'danger');
   };
 
   const fetchProducts = useCallback(async () => {
@@ -69,7 +91,21 @@ export default function ProductManagement() {
       const { data } = await api.get(path('/admin/products'), {
         params: { include_archived: showArchived ? 1 : 0 }
       });
-      const items = Array.isArray(data?.items) ? data.items : data;
+      let items = Array.isArray(data?.items) ? data.items : data;
+
+      // ✅ ผูกสถานะจาก stock เพื่อแสดงผล (ให้สอดคล้องกับ BE)
+      items = (items || []).map(p => {
+        const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
+        if (stock <= 0) {
+          return { ...p, product_status_name: 'สินค้าหมด' };
+        } else if (stock <= 5) {
+          console.warn(`⚠️ สินค้าใกล้หมด: ${p.product_name} (เหลือ ${stock})`);
+          return { ...p, product_status_name: 'สต็อกใกล้หมด' };
+        } else {
+          return { ...p, product_status_name: 'พร้อมจำหน่าย' };
+        }
+      });
+
       setProducts(items || []);
     } catch (err) {
       handleApiError(err, '❌ โหลดสินค้าไม่สำเร็จ');
@@ -126,6 +162,7 @@ export default function ProductManagement() {
     );
     try {
       await api.patch(path(`/admin/products/${productId}/publish`), { is_published: !current });
+      push(!current ? '✅ เปิดแสดงสินค้าแล้ว' : '✅ ซ่อนสินค้าแล้ว', 'ok');
       await fetchProducts();
     } catch (err) {
       setProducts(prev =>
@@ -141,6 +178,7 @@ export default function ProductManagement() {
     if (!window.confirm('ย้ายสินค้านี้ไปถังเก็บใช่ไหม?')) return;
     try {
       await api.delete(path(`/admin/products/${productId}`));
+      push('🗃️ ย้ายไปถังเก็บแล้ว', 'warn');
       await fetchProducts();
     } catch (err) {
       handleApiError(err, '❌ ย้ายไปถังเก็บไม่สำเร็จ');
@@ -150,6 +188,7 @@ export default function ProductManagement() {
   const unarchiveProduct = useCallback(async (productId) => {
     try {
       await api.patch(path(`/admin/products/${productId}/unarchive`));
+      push('♻️ กู้คืนสินค้าแล้ว', 'ok');
     } catch (err) {
       return handleApiError(err, '❌ กู้คืนสินค้าไม่สำเร็จ');
     }
@@ -226,7 +265,21 @@ export default function ProductManagement() {
     });
     setIsEditing(true);
     setEditProductId(p.product_id);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // ✨ เลื่อนขึ้นฟอร์ม + โฟกัสช่องชื่อสินค้า
+    const scrollToTarget = () => {
+      const headerOffset = 80;
+      const el = formTopRef.current || nameInputRef.current;
+      if (el) {
+        const rectTop = el.getBoundingClientRect().top + window.pageYOffset;
+        window.scrollTo({ top: Math.max(0, rectTop - headerOffset), behavior: 'smooth' });
+      }
+      nameInputRef.current?.focus({ preventScroll: true });
+      nameInputRef.current?.select?.();
+    };
+    requestAnimationFrame(() => {
+      setTimeout(scrollToTarget, 0);
+    });
   };
 
   const clearForm = () => {
@@ -249,12 +302,13 @@ export default function ProductManagement() {
     const trimmedPrice = asStr(form.price).trim();
     const priceInt = Number.parseInt(trimmedPrice, 10);
     if (!Number.isInteger(priceInt) || priceInt < 0 || asStr(priceInt) !== trimmedPrice.replace(/^0+(?=\d)/, '')) {
-      return alert('ราคา ต้องเป็น "จำนวนเต็มไม่ติดลบ" เท่านั้น');
+      push('ราคา ต้องเป็น “จำนวนเต็มไม่ติดลบ” เท่านั้น', 'danger');
+      return;
     }
 
     const catIdStr = asStr(form.category_id).trim();
     if (!catIdStr) {
-      alert('กรุณาเลือก "ประเภท" ให้ถูกต้อง');
+      push('กรุณาเลือก “ประเภทสินค้า” ให้ถูกต้อง', 'warn');
       catRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
@@ -262,13 +316,13 @@ export default function ProductManagement() {
     const statusText = (asStr(form.product_status_id).trim() || null);
 
     const puId = toInt(form.product_unit_id);
-    if (puId == null) return alert('กรุณาเลือก "หน่วยสินค้า"');
+    if (puId == null) { push('กรุณาเลือก “หน่วยสินค้า”', 'warn'); return; }
 
     const suId    = form.size_unit_id != null ? toInt(form.size_unit_id) : null;
     const sValStr = asStr(form.size_value).trim();
     const sizeV   = sValStr === '' ? null : toNum(sValStr);
-    if (sizeV !== null && suId == null) return alert('กรุณาเลือก "หน่วยของขนาด" ให้ครบ');
-    if (sizeV === null && suId !== null) return alert('กรุณากรอก "ขนาดสินค้า (ตัวเลข)" ให้ครบ');
+    if (sizeV !== null && suId == null) { push('กรุณาเลือก “หน่วยของขนาด” ให้ครบ', 'warn'); return; }
+    if (sizeV === null && suId !== null) { push('กรุณากรอก “ขนาดสินค้า (ตัวเลข)” ให้ครบ', 'warn'); return; }
 
     let uploadedUrls = [];
     if (selectedFiles.length > 0) {
@@ -293,9 +347,11 @@ export default function ProductManagement() {
       let createdId = editProductId;
       if (isEditing && editProductId) {
         await api.put(path(`/admin/products/${editProductId}`), body);
+        push('✅ อัปเดตสินค้าสำเร็จ', 'ok');
       } else {
         const res = await api.post(path('/admin/products'), body);
         createdId = res?.data?.product_id ?? res?.data?.id ?? res?.data?.ProductID ?? createdId;
+        push('🎉 เพิ่มสินค้าเรียบร้อย', 'ok');
       }
 
       if (createdId && uploadedUrls.length > 0) {
@@ -379,10 +435,25 @@ export default function ProductManagement() {
     <option key="" value="">— เลือกหน่วยสินค้า —</option>,
     ...(lookups.product_units || []).map(u => {
       const id = u.unit_id ?? u.id;
-      const name = u.unit_name || u.name || '';
+      const name = u.unit_name || u.name || u.label || '';
       return <option key={id} value={asStr(id)}>{name}</option>;
     })
   ]), [lookups.product_units]);
+
+  /* ---------- สรุปรายการใกล้หมด/หมด ---------- */
+  const lowStockItems = useMemo(() => {
+    return (products || []).filter(p => {
+      const s = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
+      return s > 0 && s <= 5;
+    });
+  }, [products]);
+
+  const outOfStockItems = useMemo(() => {
+    return (products || []).filter(p => {
+      const s = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
+      return s <= 0;
+    });
+  }, [products]);
 
   /* ---------- view data: search/filter/group/paginate ---------- */
   const viewProductsBase = useMemo(() => {
@@ -394,6 +465,12 @@ export default function ProductManagement() {
       if (visibilityFilter === 'hidden' && published) return false;
       if (catFilter && asStr(p.category_id) !== asStr(catFilter)) return false;
       if (subcatFilter && asStr(p.subcategory_id) !== asStr(subcatFilter)) return false;
+
+      // ✅ กรองตามสต็อก
+      const s = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
+      if (stockFilter === 'low' && !(s > 0 && s <= 5)) return false;
+      if (stockFilter === 'out' && !(s <= 0)) return false;
+
       if (q) {
         const hay = [
           p.product_name, p.description,
@@ -404,9 +481,9 @@ export default function ProductManagement() {
       }
       return true;
     });
-  }, [products, visibilityFilter, catFilter, subcatFilter, query]);
+  }, [products, visibilityFilter, catFilter, subcatFilter, stockFilter, query]);
 
-  useEffect(() => { setPage(1); }, [visibilityFilter, catFilter, subcatFilter, query, perPage, groupByCategory]);
+  useEffect(() => { setPage(1); }, [visibilityFilter, catFilter, subcatFilter, stockFilter, query, perPage, groupByCategory]);
 
   const total = viewProductsBase.length;
   const totalPages = perPage && perPage > 0 ? Math.max(1, Math.ceil(total / perPage)) : 1;
@@ -434,23 +511,72 @@ export default function ProductManagement() {
 
   return (
     <div className="pm-page">
-      {/* quick links */}
-      <div className="pm-links">
-        <Link to="/admin/categories" className="btn btn-ghost">📂 จัดการประเภท</Link>
-        <Link to="/admin/subcategories" className="btn btn-ghost">🗂️ จัดการหมวดย่อย</Link>
-        <Link to="/admin/units" className="btn btn-ghost">📏 จัดการหน่วยสินค้า</Link>
-        <Link to="/admin/sizes" className="btn btn-ghost">📐 จัดการหน่วยขนาด</Link>
+      {/* Toast Host */}
+      <div className="pm-toasts">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast ${t.type}`}>
+            <div className="toast-msg">{t.msg}</div>
+            <button className="toast-x" onClick={()=>remove(t.id)} aria-label="close">×</button>
+          </div>
+        ))}
       </div>
+
+      {/* quick header */}
+      <div className="pm-header">
+        <div className="pm-title">
+          <span className="emoji" aria-hidden>🪴</span>
+          <h1>จัดการสินค้า</h1>
+          <span className="subtitle">เพิ่ม/แก้ไขสินค้า และควบคุมการแสดงผล</span>
+        </div>
+        <div className="pm-links">
+          <Link to="/admin/categories" className="btn btn-ghost">📂 จัดการประเภท</Link>
+          <Link to="/admin/subcategories" className="btn btn-ghost">🗂️ จัดการหมวดย่อย</Link>
+          <Link to="/admin/units" className="btn btn-ghost">📏 หน่วยสินค้า</Link>
+          <Link to="/admin/sizes" className="btn btn-ghost">📐 หน่วยขนาด</Link>
+        </div>
+      </div>
+
+      {/* แจ้งเตือนสรุปสต็อก */}
+     {(lowStockItems.length > 0) && (
+  <div className="pm-alertbar">
+    <button
+      type="button"
+      className="pm-alert warn"
+      onClick={() => { setStockFilter('low'); }}
+      title="ดูเฉพาะสินค้าใกล้หมด (1–5)"
+    >
+      ⚠️ ใกล้หมด {lowStockItems.length} รายการ — คลิกเพื่อกรอง
+    </button>
+
+    {(stockFilter !== 'all') && (
+      <button
+        type="button"
+        className="pm-alert clear"
+        onClick={() => setStockFilter('all')}
+      >
+        ล้างตัวกรอง
+      </button>
+    )}
+  </div>
+)}
+
 
       {/* form panel */}
       <div className="pm-panel">
-        <h2>{isEditing ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</h2>
+        <h2 className="section-title">{isEditing ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</h2>
 
-        <form onSubmit={onSubmit} className="pm-form">
+        <form ref={formTopRef} onSubmit={onSubmit} className="pm-form">
           {/* แถว 1 */}
           <div className="frm">
             <label htmlFor="product_name">ชื่อสินค้า</label>
-            <input id="product_name" name="product_name" placeholder="เช่น ยางอินโด/Monstera" value={form.product_name} onChange={onChange} />
+            <input
+              ref={nameInputRef}
+              id="product_name"
+              name="product_name"
+              placeholder="เช่น ยางอินโด / Monstera"
+              value={form.product_name}
+              onChange={onChange}
+            />
           </div>
 
           <div className="frm">
@@ -523,13 +649,7 @@ export default function ProductManagement() {
           <div className="frm">
             <label htmlFor="subcategory_id">หมวดหมู่ย่อย</label>
             <select id="subcategory_id" name="subcategory_id" value={form.subcategory_id ?? ''} onChange={onChange}>
-              <option value="">{filteredSubcategoriesByForm.length ? 'เลือกหมวดย่อย' : '— ไม่มีหมวดย่อย —'}</option>
-              {filteredSubcategoriesByForm
-                .slice()
-                .sort((a,b)=>asStr(a.subcategory_name).localeCompare(asStr(b.subcategory_name),'th'))
-                .map(s => (
-                  <option key={s.subcategory_id} value={asStr(s.subcategory_id)}>{s.subcategory_name}</option>
-                ))}
+              {subcategoryOptions}
             </select>
           </div>
 
@@ -567,18 +687,25 @@ export default function ProductManagement() {
 
           {/* Actions */}
           <div className="pm-actions col-span-2">
-            <button type="submit" className="btn btn-primary">{isEditing ? 'อัปเดต' : 'บันทึก'}</button>
-            {isEditing && <button type="button" className="btn btn-ghost" onClick={clearForm}>ยกเลิกแก้ไข</button>}
+            <button type="submit" className="btn btn-primary btn-lg">{isEditing ? 'อัปเดต' : 'บันทึก'}</button>
+            {isEditing && <button type="button" className="btn btn-ghost btn-lg" onClick={clearForm}>ยกเลิกแก้ไข</button>}
           </div>
         </form>
       </div>
 
       {/* ---------- Toolbar: filters/search/paging ---------- */}
-      <div className="pm-toolbar-2">
+      <div className="pm-toolbar-2 sticky-toolbar">
         <div className="seg">
           <button type="button" className={`seg-btn ${visibilityFilter==='all' ? 'active': ''}`} onClick={()=>setVisibilityFilter('all')}>ทั้งหมด</button>
           <button type="button" className={`seg-btn ${visibilityFilter==='shown' ? 'active': ''}`} onClick={()=>setVisibilityFilter('shown')}>เฉพาะที่แสดง</button>
           <button type="button" className={`seg-btn ${visibilityFilter==='hidden' ? 'active': ''}`} onClick={()=>setVisibilityFilter('hidden')}>เฉพาะที่ซ่อน</button>
+        </div>
+
+        {/* กรองตามสต็อก */}
+        <div className="seg">
+          <button type="button" className={`seg-btn ${stockFilter==='all' ? 'active': ''}`} onClick={()=>setStockFilter('all')}>สต็อก: ทั้งหมด</button>
+          <button type="button" className={`seg-btn ${stockFilter==='low' ? 'active': ''}`} onClick={()=>setStockFilter('low')}>ใกล้หมด (1–5)</button>
+          <button type="button" className={`seg-btn ${stockFilter==='out' ? 'active': ''}`} onClick={()=>setStockFilter('out')}>หมด (0)</button>
         </div>
 
         <input
@@ -639,59 +766,70 @@ export default function ProductManagement() {
 
       {/* ---------- Summary + Pagination ---------- */}
       <div className="pm-summary">
-        <div>ทั้งหมด {total.toLocaleString()} รายการ</div>
+        <div className="big-number">ทั้งหมด <strong>{total.toLocaleString()}</strong> รายการ</div>
         {perPage !== 0 && (
           <div className="pm-pager">
             <button className="btn-ghost" disabled={pageSafe<=1} onClick={()=>setPage(p=>Math.max(1, p-1))}>‹ ก่อนหน้า</button>
-            <span>หน้า {pageSafe} / {totalPages}</span>
+            <span className="pager-text">หน้า <strong>{pageSafe}</strong> / {totalPages}</span>
             <button className="btn-ghost" disabled={pageSafe>=totalPages} onClick={()=>setPage(p=>Math.min(totalPages, p+1))}>ถัดไป ›</button>
           </div>
         )}
       </div>
 
       {/* ---------- Table / Grouped View ---------- */}
-      <h2>รายการสินค้า</h2>
+      <h2 className="section-title">รายการสินค้า</h2>
       <div className="pm-table-wrap">
         {!groupByCategory ? (
           <table className="pm-table">
             <thead>
               <tr>
-                <th>สินค้า</th><th>ราคา</th><th>คงเหลือ</th><th>หมวดหมู่</th><th>สถานะ</th><th>จัดการ</th>
+                <th>สินค้า</th><th>ราคา</th><th>คงเหลือ</th><th>หมวดหมู่</th><th>สถานะ</th><th className="th-actions">จัดการ</th>
               </tr>
             </thead>
             <tbody>
               {(paged || []).map(p => {
                 const published = (typeof p.is_published === 'boolean') ? p.is_published : true;
+                const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
+                const stockClass = stock <= 0 ? 'stock-badge danger' : stock <= 5 ? 'stock-badge warn' : 'stock-badge ok';
+
                 return (
                   <tr key={p.product_id} className={p.is_archived ? 'is-archived' : ''}>
                     <td>
                       <span className={`pill ${published ? 'on' : 'off'}`}>{published ? 'กำลังแสดง' : 'ถูกซ่อน'}</span>
                       <span className="name-with-badges">
-                        {p.product_name}
+                        <strong className="product-name">{p.product_name}</strong>
                         {p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}
                       </span>
                     </td>
-                    <td>{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</td>
-                    <td>{p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0}</td>
+                    <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
+                    <td><span className={stockClass}>{stock}</span></td>
                     <td>{`${p.category_name || '-'} / ${p.subcategory_name || '-'}`}</td>
-                    <td>{p.product_status_name ?? pickStatusName(p)}</td>
+                    <td>
+                      <span className={
+                        p.product_status_name === 'สินค้าหมด' ? 'status-badge danger' :
+                        p.product_status_name === 'สต็อกใกล้หมด' ? 'status-badge warn' :
+                        'status-badge ok'
+                      }>
+                        {p.product_status_name ?? pickStatusName(p)}
+                      </span>
+                    </td>
                     <td className="cell-actions">
-                      <button className={`btn ${published ? 'btn-warn' : 'btn-primary'}`} onClick={() => togglePublish(p.product_id, published)}>
-                        {published ? 'ไม่แสดงสินค้า' : 'แสดงสินค้า'}
+                      <button className={`btn ${published ? 'btn-warn' : 'btn-primary'} btn-md`} onClick={() => togglePublish(p.product_id, published)}>
+                        {published ? 'ไม่แสดง' : 'แสดง'}
                       </button>
-                      <button className="btn btn-ghost" onClick={() => onEdit(p)}>แก้ไข</button>
+                      <button className="btn btn-ghost btn-md" onClick={() => onEdit(p)}>แก้ไข</button>
                       {!p.is_archived ? (
-                        <button className="btn btn-warn" onClick={() => archiveProduct(p.product_id)}>ย้ายไปถังเก็บ</button>
+                        <button className="btn btn-danger btn-md" onClick={() => archiveProduct(p.product_id)}>ย้ายไปถังเก็บ</button>
                       ) : (
-                        <button className="btn btn-primary" onClick={() => unarchiveProduct(p.product_id)}>กู้คืน</button>
+                        <button className="btn btn-primary btn-md" onClick={() => unarchiveProduct(p.product_id)}>กู้คืน</button>
                       )}
-                      <Link to={`/admin/products/${p.product_id}/variants`} className="btn btn-ghost">ตัวเลือก/ขนาด</Link>
+                      <Link to={`/admin/products/${p.product_id}/variants`} className="btn btn-ghost btn-md">ตัวเลือก/ขนาด</Link>
                     </td>
                   </tr>
                 );
               })}
               {(!paged || paged.length === 0) && (
-                <tr><td colSpan={6} style={{ color:'#777' }}>— ไม่มีข้อมูล —</td></tr>
+                <tr><td colSpan={6} style={{ color:'#777', textAlign:'center', padding:'18px' }}>— ไม่มีข้อมูล —</td></tr>
               )}
             </tbody>
           </table>
@@ -703,31 +841,42 @@ export default function ProductManagement() {
                 <table className="pm-table small">
                   <thead>
                     <tr>
-                      <th>สินค้า</th><th>ราคา</th><th>คงเหลือ</th><th>หมวดย่อย</th><th>สถานะ</th><th>จัดการ</th>
+                      <th>สินค้า</th><th>ราคา</th><th>คงเหลือ</th><th>หมวดย่อย</th><th>สถานะ</th><th className="th-actions">จัดการ</th>
                     </tr>
                   </thead>
                   <tbody>
                     {items.map(p => {
                       const published = (typeof p.is_published === 'boolean') ? p.is_published : true;
+                      const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
+                      const stockClass = stock <= 0 ? 'stock-badge danger' : stock <= 5 ? 'stock-badge warn' : 'stock-badge ok';
+
                       return (
                         <tr key={p.product_id} className={p.is_archived ? 'is-archived' : ''}>
                           <td>
                             <span className={`pill ${published ? 'on' : 'off'}`}>{published ? 'กำลังแสดง' : 'ถูกซ่อน'}</span>
-                            <span className="name-with-badges">{p.product_name}{p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}</span>
+                            <span className="name-with-badges"><strong className="product-name">{p.product_name}</strong>{p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}</span>
                           </td>
-                          <td>{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</td>
-                          <td>{p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0}</td>
+                          <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
+                          <td><span className={stockClass}>{stock}</span></td>
                           <td>{p.subcategory_name || '-'}</td>
-                          <td>{p.product_status_name ?? pickStatusName(p)}</td>
+                          <td>
+                            <span className={
+                              p.product_status_name === 'สินค้าหมด' ? 'status-badge danger' :
+                              p.product_status_name === 'สต็อกใกล้หมด' ? 'status-badge warn' :
+                              'status-badge ok'
+                            }>
+                              {p.product_status_name ?? pickStatusName(p)}
+                            </span>
+                          </td>
                           <td className="cell-actions">
-                            <button className={`btn ${published ? 'btn-warn' : 'btn-primary'}`} onClick={() => togglePublish(p.product_id, published)}>
+                            <button className={`btn ${published ? 'btn-warn' : 'btn-primary'} btn-md`} onClick={() => togglePublish(p.product_id, published)}>
                               {published ? 'ไม่แสดง' : 'แสดง'}
                             </button>
-                            <button className="btn btn-ghost" onClick={() => onEdit(p)}>แก้ไข</button>
+                            <button className="btn btn-ghost btn-md" onClick={() => onEdit(p)}>แก้ไข</button>
                             {!p.is_archived ? (
-                              <button className="btn btn-warn" onClick={() => archiveProduct(p.product_id)}>เก็บ</button>
+                              <button className="btn btn-danger btn-md" onClick={() => archiveProduct(p.product_id)}>เก็บ</button>
                             ) : (
-                              <button className="btn btn-primary" onClick={() => unarchiveProduct(p.product_id)}>กู้คืน</button>
+                              <button className="btn btn-primary btn-md" onClick={() => unarchiveProduct(p.product_id)}>กู้คืน</button>
                             )}
                           </td>
                         </tr>
@@ -737,7 +886,7 @@ export default function ProductManagement() {
                 </table>
               </div>
             ))}
-            {(!grouped || grouped.length === 0) && <div style={{color:'#777'}}>— ไม่มีข้อมูล —</div>}
+            {(!grouped || grouped.length === 0) && <div style={{color:'#777', padding:'16px'}}>— ไม่มีข้อมูล —</div>}
           </div>
         )}
       </div>

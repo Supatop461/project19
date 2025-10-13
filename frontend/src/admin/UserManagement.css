@@ -1,23 +1,67 @@
+/* Page */
 .user-page { padding: 24px; }
 .user-page h2 { font-size: 1.6rem; margin-bottom: 16px; }
 
-.toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
-.toolbar input { flex: 1; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; }
-.toolbar select, .toolbar button { padding: 8px 10px; border-radius: 8px; border: 1px solid #ddd; background: #fff; cursor: pointer; }
+/* Toolbar */
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar input { flex: 1; min-width: 220px; padding: 10px 12px; border: 1px solid #ddd; border-radius: 10px; }
+.toolbar select,
+.toolbar button {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+}
 .toolbar button:disabled { opacity: .6; cursor: default; }
 
-.user-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; }
-.user-table th, .user-table td { padding: 10px 12px; border-bottom: 1px solid #eee; text-align: left; }
+/* Table */
+.user-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; }
+.user-table th, .user-table td { padding: 12px 14px; border-bottom: 1px solid #eee; text-align: left; vertical-align: middle; }
 .user-table th { background: #f7f7f7; font-weight: 600; }
+.user-table tbody tr:hover { background: #fafafa; }
 
+/* Actions */
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-button { padding: 6px 10px; border: none; border-radius: 8px; cursor: pointer; }
+button { padding: 8px 12px; border: none; border-radius: 10px; cursor: pointer; line-height: 1; }
 button.primary { background: #4f9f4a; color: #fff; }
 button.ghost { background: #f1f1f1; color: #333; }
 button.ban { background: #e74c3c; color: #fff; }
 button.unban { background: #2ecc71; color: #fff; }
-.active { color: #2ecc71; font-weight: 600; }
-.banned { color: #e74c3c; font-weight: 600; }
+button:disabled { opacity: .6; cursor: default; }
 
-.badge { background: #eef2f7; color: #334; padding: 2px 8px; border-radius: 999px; font-size: .85rem; }
-.badge-admin { background: #eaf8ea; color: #2c7a2c; padding: 2px 8px; border-radius: 999px; font-size: .85rem; }
+/* Badges */
+.badge { background: #eef2f7; color: #334; padding: 4px 10px; border-radius: 999px; font-size: .85rem; }
+.badge-admin { background: #eaf8ea; color: #2c7a2c; }
+.badge-ok { background: #e7f7ee; color: #1b7a43; }
+.badge-off { background: #fde8e8; color: #a11; }
+.chip-me { margin-left: 8px; font-size: .75rem; padding: 2px 8px; border-radius: 999px; background: #ffe9cc; color: #9a5a00; }
+
+/* Pretty Modal */
+.umodal-backdrop{
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
+}
+.umodal{
+  width: min(520px, 92vw);
+  background: #fff; border-radius: 16px; padding: 18px 18px 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.18);
+}
+.umodal h3{ margin: 0 0 6px; font-size: 1.2rem; }
+.umodal-sub{ margin: 0 0 12px; color: #666; }
+.umodal-label{ display:block; font-size: .9rem; color:#444; margin-bottom: 6px; }
+.umodal-input{
+  width:100%; padding: 10px 12px; border:1px solid #ddd; border-radius: 12px;
+  font-size: 1rem;
+}
+.umodal-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top: 14px; }
+.umodal-actions .ghost{ background:#f1f1f1; color:#333; }
+.umodal-actions .primary{ background:#4f9f4a; color:#fff; border:none; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .user-table th:nth-child(1),
+  .user-table td:nth-child(1) { width: 48px; }
+  .actions { gap: 6px; }
+  button { padding: 7px 10px; border-radius: 8px; }
+}

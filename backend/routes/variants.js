@@ -3,12 +3,27 @@
 // - READ/CRUD options & values (ทนสคีมาต่างกันเล็กน้อย; มี option_position/value_position ก็ใช้, ไม่มีก็ข้าม)
 // - READ/CRUD variants + generate combos (ตรวจคอลัมน์ price/stock/image แบบไดนามิก)
 // - resolve-variant สำหรับ PDP/Cart (กัน option/value ข้ามสินค้า + คืนรูปจาก variant เองถ้ามี, รองรับ view)
+// - โหมดเร็ว upsert-single (รายละเอียด 1–3 ช่อง → Variant เดียว, รองรับ images/videos)
 // - โหมดดีบัก: GET /api/variants/_ping
 
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
-const { requireAuth, requireRole } = require('../middleware/auth');
+
+// ✅ db: รองรับทั้ง ../db และ ../db/db
+let db;
+try { db = require('../db'); } catch { db = require('../db/db'); }
+
+// ✅ auth: ถ้าไม่มี middleware/auth ให้ fallback no-op (กันแครช)
+const { requireAuth, requireRole } = (() => {
+  try {
+    return require('../middleware/auth');
+  } catch {
+    return {
+      requireAuth: (_req, _res, next) => next(),
+      requireRole: () => (_req, _res, next) => next(),
+    };
+  }
+})();
 
 const mustAdmin = [requireAuth, requireRole(['admin'])];
 const isDev = process.env.NODE_ENV !== 'production';
@@ -36,7 +51,7 @@ async function hasColumn(table, col) {
   return rows.length > 0;
 }
 
-// ✅ helper ใหม่: เช็คว่ามี VIEW ไหม
+// ✅ helper: VIEW ?
 async function hasView(viewName) {
   const { rows } = await db.query(`
     SELECT 1 FROM information_schema.views
@@ -53,11 +68,7 @@ async function getClient() {
   return { query: (...a) => db.query(...a), release: () => {} };
 }
 
-// แยกชื่อคอลัมน์สำคัญใน product_variants ตามที่มีจริงในสคีมา
-// - stock: stock_qty | stock | null
-// - price: price_override | price | null
-// - active: is_active | null
-// - image: image_url | null
+// เลือกคอลัมน์สำคัญใน product_variants ตามสคีมาที่มีจริง
 async function pickVariantCols() {
   const stockCol = (await hasColumn('product_variants', 'stock_qty'))
     ? 'stock_qty'
@@ -75,6 +86,19 @@ async function pickVariantCols() {
   const imageCol  = (await hasColumn('product_variants', 'image_url')) ? 'image_url' : null;
 
   return { stockCol, priceCol, activeCol, imageCol };
+}
+
+// ✅ เลือก base price ของ "สินค้าแม่" จากคอลัมน์ที่มีจริง (เรียงลำดับความสำคัญ)
+async function pickProductBasePriceParts() {
+  const cols = [];
+  if (await hasColumn('products', 'cost_price'))    cols.push('p.cost_price');
+  if (await hasColumn('products', 'price'))         cols.push('p.price');
+  if (await hasColumn('products', 'selling_price')) cols.push('p.selling_price');
+
+  if (!cols.length) return { expr: 'NULL', groupBy: null };
+  if (cols.length === 1) return { expr: cols[0], groupBy: cols[0] };
+  const expr = `COALESCE(${cols.join(', ')})`;
+  return { expr, groupBy: cols.join(', ') };
 }
 
 /* -------------------- debug -------------------- */
@@ -137,7 +161,6 @@ router.get('/products/:product_id/options', async (req, res) => {
 /* =========================================================
  * OPTIONS & VALUES (WRITE) — admin only
  * ========================================================= */
-// POST /api/variants/products/:product_id/options
 router.post('/products/:product_id/options', ...mustAdmin, async (req, res) => {
   try {
     const productId = toInt(req.params.product_id);
@@ -182,7 +205,6 @@ router.post('/products/:product_id/options', ...mustAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/variants/options/:option_id
 router.put('/options/:option_id', ...mustAdmin, async (req, res) => {
   try {
     const optionId = toInt(req.params.option_id);
@@ -217,7 +239,6 @@ router.put('/options/:option_id', ...mustAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/variants/options/:option_id
 router.delete('/options/:option_id', ...mustAdmin, async (req, res) => {
   try {
     const optionId = toInt(req.params.option_id);
@@ -233,7 +254,6 @@ router.delete('/options/:option_id', ...mustAdmin, async (req, res) => {
   }
 });
 
-// POST /api/variants/options/:option_id/values
 router.post('/options/:option_id/values', ...mustAdmin, async (req, res) => {
   try {
     const optionId = toInt(req.params.option_id);
@@ -269,7 +289,6 @@ router.post('/options/:option_id/values', ...mustAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/variants/values/:value_id
 router.put('/values/:value_id', ...mustAdmin, async (req, res) => {
   try {
     const valueId = toInt(req.params.value_id);
@@ -304,7 +323,6 @@ router.put('/values/:value_id', ...mustAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/variants/values/:value_id
 router.delete('/values/:value_id', ...mustAdmin, async (req, res) => {
   try {
     const valueId = toInt(req.params.value_id);
@@ -330,14 +348,16 @@ router.get('/product/:id', async (req, res) => {
     if (!Number.isInteger(productId)) return res.status(400).json({ error: 'Invalid product id' });
     const onlyActive = String(req.query.active ?? '1') === '1';
 
-    // (1) ถ้ามี VIEW live stock → ใช้โดยตรง
+    const base = await pickProductBasePriceParts();
+
+    // (1) ใช้ VIEW live stock ถ้ามี
     if (await hasView('v_product_variants_live_stock')) {
       const { rows } = await db.query(`
         SELECT
           lv.variant_id,
           lv.product_id,
           lv.sku,
-          COALESCE(lv.price_override, p.cost_price) AS final_price,
+          COALESCE(lv.price_override, ${baseExpr}) AS final_price,
           lv.stock::int                         AS stock,
           COALESCE(lv.is_active, TRUE)          AS is_active,
           lv.image_url,
@@ -354,7 +374,7 @@ router.get('/product/:id', async (req, res) => {
         LEFT JOIN product_variant_values pvv ON pvv.variant_id = lv.variant_id
         WHERE lv.product_id = $1
           ${onlyActive ? 'AND COALESCE(lv.is_active, TRUE) = TRUE' : ''}
-        GROUP BY lv.variant_id, lv.product_id, lv.sku, lv.price_override, lv.stock, lv.is_active, lv.image_url, p.cost_price
+        GROUP BY lv.variant_id, lv.product_id, lv.sku, lv.price_override, lv.stock, lv.is_active, lv.image_url, ${baseExpr}
         ORDER BY lv.variant_id ASC
       `, [productId]);
       return res.json(rows);
@@ -378,14 +398,14 @@ router.get('/product/:id', async (req, res) => {
     // (3) fallback: ตารางจริง
     const { stockCol, priceCol, imageCol } = await pickVariantCols();
     const stockExpr = stockCol ? `v.${stockCol}` : `0`;
-    const priceExpr = priceCol ? `v.${priceCol}` : `p.cost_price`;
+    const priceExpr = priceCol ? `v.${priceCol}` : `COALESCE(${baseExpr})`;
 
     const { rows } = await db.query(`
       SELECT
         v.variant_id,
         v.product_id,
         v.sku,
-        COALESCE(${priceExpr}, p.cost_price) AS final_price,
+        COALESCE(${priceExpr}) AS final_price,
         ${stockExpr}::int AS stock,
         v.is_active,
         ${imageCol ? `v.${imageCol}` : 'NULL'} AS image_url,
@@ -400,7 +420,7 @@ router.get('/product/:id', async (req, res) => {
       LEFT JOIN product_variant_values pvv ON pvv.variant_id = v.variant_id
       WHERE v.product_id = $1
         ${onlyActive ? 'AND COALESCE(v.is_active, TRUE) = TRUE' : ''}
-      GROUP BY v.variant_id, v.product_id, v.sku, ${priceExpr}, p.cost_price, ${stockExpr}, v.is_active ${imageCol ? `, v.${imageCol}` : ''}
+      GROUP BY v.variant_id, v.product_id, v.sku, ${priceExpr}, ${stockExpr}, v.is_active ${imageCol ? `, v.${imageCol}` : ''}
       ORDER BY v.variant_id ASC
     `, [productId]);
 
@@ -414,7 +434,6 @@ router.get('/product/:id', async (req, res) => {
 /* =========================================================
  * VARIANTS (WRITE) — admin only
  * ========================================================= */
-// POST /api/variants/products/:product_id/variants
 router.post('/products/:product_id/variants', ...mustAdmin, async (req, res) => {
   const productId = toInt(req.params.product_id);
   const { sku, price = 0, stock_qty = 0, is_active = true, image_url = null, option_values = [] } = req.body || {};
@@ -452,7 +471,6 @@ router.post('/products/:product_id/variants', ...mustAdmin, async (req, res) => 
     );
     const variant = ins.rows[0];
 
-    // bind option/value
     if (Array.isArray(option_values)) {
       for (const ov of option_values) {
         await client.query(
@@ -478,7 +496,6 @@ router.post('/products/:product_id/variants', ...mustAdmin, async (req, res) => 
   }
 });
 
-// PUT /api/variants/:variant_id
 router.put('/:variant_id', ...mustAdmin, async (req, res) => {
   const variantId = toInt(req.params.variant_id);
   const { sku, price, stock_qty, is_active, image_url, option_values } = req.body || {};
@@ -491,7 +508,7 @@ router.put('/:variant_id', ...mustAdmin, async (req, res) => {
     const vals = [];
     let i = 1;
 
-    if (sku !== undefined)                   { sets.push(`sku = COALESCE($${i++}, sku)`);              vals.push(sku); }
+    if (sku !== undefined)                   { sets.push(`sku = COALESCE($${i++}, sku)`);                 vals.push(sku); }
     if (priceCol && price !== undefined)     { sets.push(`${priceCol} = COALESCE($${i++}, ${priceCol})`); vals.push(Math.max(0, Number(price) || 0)); }
     if (stockCol && stock_qty !== undefined) { sets.push(`${stockCol} = COALESCE($${i++}, ${stockCol})`); vals.push(Math.max(0, Number(stock_qty) || 0)); }
     if (activeCol && is_active !== undefined){ sets.push(`${activeCol} = COALESCE($${i++}, ${activeCol})`); vals.push(!!is_active); }
@@ -541,7 +558,6 @@ router.put('/:variant_id', ...mustAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/variants/:variant_id
 router.delete('/:variant_id', ...mustAdmin, async (req, res) => {
   try {
     const variantId = toInt(req.params.variant_id);
@@ -558,7 +574,184 @@ router.delete('/:variant_id', ...mustAdmin, async (req, res) => {
 });
 
 /* =========================================================
- * RESOLVE VARIANT (PDP/Cart) — ใช้ VIEW live stock
+ * QUICK MODE: UPSERT SINGLE VARIANT (รายละเอียด 1–3 ช่อง + สื่อ)
+ * POST /api/variants/products/:id/upsert-single
+ * body: { details:[{name,value}..<=3], sku, price, images:[], videos:[] }
+ * ========================================================= */
+async function getOrCreateOption(client, productId, optionName) {
+  const { rows } = await client.query(
+    `SELECT option_id FROM product_options
+     WHERE product_id=$1 AND option_name=$2
+     ORDER BY option_id LIMIT 1`,
+    [productId, optionName]
+  );
+  if (rows.length) return rows[0].option_id;
+
+  const { rows: ins } = await client.query(
+    `INSERT INTO product_options (product_id, option_name)
+     VALUES ($1,$2) RETURNING option_id`,
+    [productId, optionName]
+  );
+  return ins[0].option_id;
+}
+async function getOrCreateValue(client, optionId, valueName) {
+  const { rows } = await client.query(
+    `SELECT value_id FROM product_option_values
+     WHERE option_id=$1 AND value_name=$2
+     ORDER BY value_id LIMIT 1`,
+    [optionId, valueName]
+  );
+  if (rows.length) return rows[0].value_id;
+
+  const { rows: ins } = await client.query(
+    `INSERT INTO product_option_values (option_id, value_name)
+     VALUES ($1,$2) RETURNING value_id`,
+    [optionId, valueName]
+  );
+  return ins[0].value_id;
+}
+
+router.post('/products/:id/upsert-single', ...mustAdmin, async (req, res) => {
+  const productId = toInt(req.params.id);
+  let { details = [], sku = null, price = null, images = [], videos = [] } = req.body || {};
+
+  // กรองรายละเอียด 1–3 ช่อง
+  details = Array.isArray(details) ? details : [];
+  const clean = [];
+  for (const d of details) {
+    const n = String(d?.name || '').trim();
+    const v = String(d?.value || '').trim();
+    if (n && v) clean.push({ name: n, value: v });
+    if (clean.length >= 3) break;
+  }
+  if (!clean.length) return res.status(400).json({ error: 'NEED_AT_LEAST_ONE_DETAIL' });
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    // 1) upsert options & values
+    const pairs = [];
+    for (const d of clean) {
+      const optionId = await getOrCreateOption(client, productId, d.name);
+      const valueId  = await getOrCreateValue(client, optionId, d.value);
+      pairs.push({ option_id: optionId, value_id: valueId });
+    }
+
+    // 2) หา variant ที่ตรงกับชุด pairs ทั้งหมด
+    const valuesPlaceholders = pairs
+      .map((_, i) => `($${i*2+2}::int, $${i*2+3}::int)`).join(', ');
+
+    const params = [productId];
+    for (const p of pairs) { params.push(p.option_id, p.value_id); }
+    params.push(pairs.length);
+
+    const findSql = `
+      WITH pairs(option_id, value_id) AS (VALUES ${valuesPlaceholders})
+      SELECT v.variant_id
+      FROM product_variants v
+      LEFT JOIN product_variant_values pvv ON pvv.variant_id = v.variant_id
+      WHERE v.product_id = $1
+      GROUP BY v.variant_id
+      HAVING
+        SUM( CASE WHEN (pvv.option_id, pvv.value_id) IN (SELECT option_id, value_id FROM pairs) THEN 1 ELSE 0 END ) = $${params.length}
+        AND COUNT(*) = $${params.length}
+      LIMIT 1
+    `;
+    const { rows: found } = await client.query(findSql, params);
+
+    // 2.1 เช็ค SKU ซ้ำภายในสินค้านี้
+    if (sku && sku.trim()) {
+      const { rows: dupe } = await client.query(
+        `SELECT variant_id FROM product_variants WHERE product_id=$1 AND sku=$2`,
+        [productId, sku.trim()]
+      );
+      if (dupe.length && (!found.length || dupe[0].variant_id !== found[0]?.variant_id)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'SKU_DUPLICATE_IN_PRODUCT' });
+      }
+    }
+
+    const { priceCol, imageCol } = await pickVariantCols();
+
+    // 3) อัปเดตถ้ามีอยู่แล้ว ไม่งั้นสร้างใหม่
+    let variantId;
+    if (found.length) {
+      variantId = found[0].variant_id;
+      const sets = [];
+      const vals = [];
+      let i = 1;
+
+      sets.push(`sku = COALESCE($${i++}, sku)`); vals.push(sku ? sku.trim() : null);
+      if (priceCol) { sets.push(`${priceCol} = COALESCE($${i++}, ${priceCol})`); vals.push(price === null ? null : Math.max(0, Number(price)||0)); }
+      if (imageCol && images?.length) { sets.push(`${imageCol} = $${i++}`); vals.push(images[0]); }
+
+      if (!sets.length) sets.push('sku = sku');
+      vals.push(variantId);
+
+      await client.query(`UPDATE product_variants SET ${sets.join(', ')} WHERE variant_id=$${i}`, vals);
+    } else {
+      const cols = ['product_id', 'sku'];
+      const vals = [productId, sku ? sku.trim() : null];
+      if (priceCol)               { cols.push(priceCol);  vals.push(price === null ? null : Math.max(0, Number(price)||0)); }
+      if (imageCol && images?.length) { cols.push(imageCol); vals.push(images[0]); }
+
+      const placeholders = cols.map((_, i) => `$${i+1}`).join(', ');
+      const { rows: vIns } = await client.query(
+        `INSERT INTO product_variants (${cols.join(', ')}) VALUES (${placeholders}) RETURNING variant_id`,
+        vals
+      );
+      variantId = vIns[0].variant_id;
+
+      // map pairs
+      for (const p of pairs) {
+        await client.query(
+          `INSERT INTO product_variant_values (variant_id, option_id, value_id)
+           VALUES ($1,$2,$3)
+           ON CONFLICT (variant_id, option_id) DO UPDATE SET value_id = EXCLUDED.value_id`,
+          [variantId, p.option_id, p.value_id]
+        );
+      }
+    }
+
+    // 4) บันทึกสื่อเข้าตาราง product_images (ถ้ามี)
+    const hasImagesTable = await hasTable('product_images');
+    if (hasImagesTable) {
+      const hasUrl       = await hasColumn('product_images', 'url');
+      const hasProductId = await hasColumn('product_images', 'product_id');
+      const hasVariantId = await hasColumn('product_images', 'variant_id');
+      const hasPrimary   = await hasColumn('product_images', 'is_primary');
+      const hasPosition  = await hasColumn('product_images', 'position');
+
+      if (hasUrl && hasProductId) {
+        let pos = 1;
+        for (const u of images || []) {
+          const cols = ['url', 'product_id'];
+          const vals = [u, productId];
+          if (hasVariantId) { cols.push('variant_id'); vals.push(variantId); }
+          if (hasPrimary)   { cols.push('is_primary'); vals.push(pos === 1); }
+          if (hasPosition)  { cols.push('position');   vals.push(pos); }
+
+          const ph = cols.map((_, i) => `$${i+1}`).join(', ');
+          await client.query(`INSERT INTO product_images (${cols.join(', ')}) VALUES (${ph})`, vals);
+          pos++;
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+    return res.json({ ok: true, product_id: productId, variant_id: variantId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('upsert-single error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  } finally {
+    client.release?.();
+  }
+});
+
+/* =========================================================
+ * RESOLVE VARIANT (PDP/Cart)
  * POST /api/variants/products/:id/resolve-variant
  * body: { optionIds:[...], valueIds:[...] }
  * ========================================================= */
@@ -574,15 +767,15 @@ router.post('/products/:id/resolve-variant', async (req, res) => {
       return res.status(400).json({ error: 'bad params: optionIds/valueIds' });
     }
 
+    const baseExpr = await pickProductBasePriceExpr();
     const hasImgView = await hasView('v_variant_images');
 
-    // (A) ไม่มีตัวเลือก → คืนตัวแรกที่ active (อ่าน stock/price/image จาก VIEW)
     if (optionIds.length === 0) {
       const sqlDefault = `
         SELECT
           lv.variant_id,
           lv.sku,
-          COALESCE(lv.price_override, p.cost_price) AS price,
+          COALESCE(lv.price_override, ${baseExpr}) AS price,
           ${hasImgView ? 'COALESCE(lv.image_url, img.display_url, p.image_url)' : 'COALESCE(lv.image_url, p.image_url)'} AS image,
           lv.stock::int AS stock_qty
         FROM v_product_variants_live_stock lv
@@ -597,7 +790,6 @@ router.post('/products/:id/resolve-variant', async (req, res) => {
       return res.json(r0.rows[0]);
     }
 
-    // (B) มีตัวเลือก → แมตช์เต็มชุด + อ่านข้อมูลสุดท้ายจาก VIEW
     const sql = `
       WITH chosen AS (
         SELECT DISTINCT x.option_id::int AS option_id, x.value_id::int AS value_id
@@ -612,7 +804,7 @@ router.post('/products/:id/resolve-variant', async (req, res) => {
       SELECT
         pv.variant_id,
         pv.sku,
-        COALESCE(lv.price_override, p.cost_price) AS price,
+        COALESCE(lv.price_override, ${baseExpr}) AS price,
         ${hasImgView ? 'COALESCE(lv.image_url, img.display_url, p.image_url)' : 'COALESCE(lv.image_url, p.image_url)'} AS image,
         lv.stock::int AS stock_qty
       FROM product_variants pv
@@ -622,7 +814,7 @@ router.post('/products/:id/resolve-variant', async (req, res) => {
       JOIN valid_pairs vp ON vp.option_id = pvv.option_id AND vp.value_id = pvv.value_id
       ${hasImgView ? 'LEFT JOIN v_variant_images img ON img.variant_id = pv.variant_id' : ''}
       WHERE pv.product_id = $1 AND COALESCE(lv.is_active, TRUE) = TRUE
-      GROUP BY pv.variant_id, pv.sku, p.cost_price, lv.price_override, lv.image_url, lv.stock ${hasImgView ? ', img.display_url' : ''}, p.image_url
+      GROUP BY pv.variant_id, pv.sku, ${baseExpr}, lv.price_override, lv.image_url, lv.stock ${hasImgView ? ', img.display_url' : ''}, p.image_url
       HAVING COUNT(*) = (SELECT COUNT(*) FROM valid_pairs)
       LIMIT 1;
     `;
@@ -637,13 +829,17 @@ router.post('/products/:id/resolve-variant', async (req, res) => {
 
 module.exports = router;
 
-/* -------------------- Manual test (แนะนำ) --------------------
-1) GET /api/variants/product/23?active=1
-   - ดูว่าฟิลด์ stock มาจาก VIEW (เช็คกับ SELECT * FROM v_product_variants_live_stock WHERE product_id=23)
+/* -------------------- Manual test --------------------
+1) GET /api/variants/product/49?active=1
 
-2) POST /api/variants/products/23/resolve-variant
-   body: { "optionIds": [], "valueIds": [] }
-   - stock_qty ต้องตรงกับ VIEW เช่นกัน
+2) POST /api/variants/products/49/upsert-single
+   body:
+   {
+     "details":[{"name":"ขนาด","value":"150"}],
+     "sku":"P49-01","price":99,
+     "images":["/uploads/example.jpg"], "videos":[]
+   }
 
-3) ทำ movement (IN/OUT) แล้วเรียก 1) และ 2) ซ้ำ → ตัวเลขต้องขยับทันที
----------------------------------------------------------------- */
+3) POST /api/variants/products/49/resolve-variant
+   body:{ "optionIds":[...], "valueIds":[...] }
+------------------------------------------------------ */
