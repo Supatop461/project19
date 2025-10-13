@@ -1,30 +1,49 @@
 // backend/server.js
-// 🌿 Project19 Backend — Stable build (11 Oct refined)
-// ใช้โครงสร้างเดิม 100% + เพิ่มความเรียบร้อย log และปรับ Units ให้เข้ากับชุดปัจจุบัน
+// 🌿 Project19 Backend — Hardened server (safe requires + stable mounts)
 
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-
 const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-const { requireAuth, requireRole } = require('./middleware/auth');
 
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.set('etag', false); // 🔴 ปิด ETag ป้องกัน 304-cache
+app.set('etag', false); // ปิด ETag กัน 304
 
-/* ───────────────────────── Security ───────────────────────── */
+/* ───────────── helpers ───────────── */
+function tryRequire(p) {
+  try { return require(p); } catch (e) { console.warn('⛔ SKIP require:', p, '-', e.code || e.message); return null; }
+}
+function mount(name, paths, router, ...guards) {
+  if (!router) return;
+  const arr = Array.isArray(paths) ? paths : [paths];
+  app.use(arr, ...guards.filter(Boolean), router);
+  console.log(`▶ ${name} router LOADED ->`, arr.join(', '));
+}
+
+/* ───────────── auth (safe default) ───────────── */
+let requireAuth = (_req, _res, next) => next();
+let requireRole  = () => (_req, _res, next) => next();
+{
+  const m = tryRequire('./middleware/auth');
+  if (m) {
+    requireAuth = m.requireAuth || requireAuth;
+    requireRole = m.requireRole  || requireRole;
+  }
+}
+
+/* ───────────── security & perf ───────────── */
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(compression());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-/* ───────────────────────── CORS ───────────────────────────── */
+/* ───────────── CORS ───────────── */
 const rawOrigins =
   process.env.FRONTEND_ORIGIN ||
   'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:5500';
@@ -43,17 +62,11 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-/* ───────────────────────── Body Parser ────────────────────── */
+/* ───────────── body parser ───────────── */
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use((err, _req, res, next) => {
-  if (err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
-    return res.status(400).json({ message: 'Invalid JSON body' });
-  }
-  next(err);
-});
 
-/* ───────────────────────── Cache Control ───────────────────── */
+/* ───────────── API cache headers ───────────── */
 app.use((req, res, next) => {
   if (req.originalUrl.startsWith('/api/')) {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -65,47 +78,19 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ───────────────────────── Debug Request ───────────────────── */
-app.use((req, _res, next) => {
-  console.log('>>>', req.method, req.originalUrl);
-  next();
-});
+/* ───────────── request debug ───────────── */
+app.use((req, _res, next) => { console.log('>>>', req.method, req.originalUrl); next(); });
 
-/* ───────────────────────── Health & Root ───────────────────── */
+/* ───────────── health/root ───────────── */
 app.get('/', (_req, res) => res.send('🌱 Plant Shop API is running...'));
 app.get('/_health', (_req, res) => res.json({ ok: true, at: 'server.js', ts: Date.now() }));
 
-/* ───────────────────────── Uploads (static) ─────────────────── */
+/* ───────────── static uploads ───────────── */
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir, { maxAge: '1h' }));
 
-/* ───────────────────────── Imports ─────────────────────────── */
-const productStatusRoutes  = require('./routes/productStatus');
-const adminProductRoutes   = require('./routes/adminProducts');
-const adminVariantsRoutes  = require('./routes/adminVariants');
-const uploadsRoutes        = require('./routes/uploads');
-const categoryRoutes       = require('./routes/categories');
-const orderRoutes          = require('./routes/orders');
-const authRoutes           = require('./routes/auth');
-const addressesRoutes      = require('./routes/addresses');
-const variantRoutes        = require('./routes/variants');
-const publicProductsRoutes = require('./routes/publicProducts');
-const inventoryRoutes      = require('./routes/inventory');
-const productImagesRoutes  = require('./routes/productImages');
-const adminSubcatRoutes    = require('./routes/adminSubcategories');
-const subcategoryRoutes    = require('./routes/subcategories');
-const lookupsRouter        = require('./routes/lookups');
-const dashboardRoutes      = require('./routes/dashboard');
-const cartRoutes           = require('./routes/cart');
-const analyticsRoutes      = require('./routes/analytics');
-const adminUnitsRouter     = require('./routes/adminUnits');   // ✅ หน่วยสินค้า
-const publicUnitsRouter    = require('./routes/publicUnits');  // ✅ หน่วยสินค้า (public)
-const sizeUnitsRouter      = require('./routes/sizeUnits');
-const adminSizeUnitsRouter = require('./routes/adminSizeUnits');
-const meRoutes             = require('./routes/me');
-
-/* ───────────────────────── Rate Limit ───────────────────────── */
+/* ───────────── rate limit (login) ───────────── */
 app.use('/api/auth/login', rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -113,46 +98,73 @@ app.use('/api/auth/login', rateLimit({
   legacyHeaders: false,
 }));
 
-/* ───────────────────────── Public Routes ───────────────────── */
-app.use(['/api/auth', '/auth'], authRoutes);
-app.use('/api/me', meRoutes);
-app.use(['/api/categories', '/categories'], categoryRoutes);
-app.use(['/api/subcategories', '/subcategories'], subcategoryRoutes);
-app.use('/api/products', publicProductsRoutes);
-app.use('/api', publicUnitsRouter); // 🔹 เพิ่ม publicUnits
-app.use('/api', lookupsRouter);
+/* ───────────── require routers (safe) ───────────── */
+const productStatusRoutes  = tryRequire('./routes/productStatus');
+const adminProductRoutes   = tryRequire('./routes/adminProducts');
+const adminVariantsRoutes  = tryRequire('./routes/adminVariants');
+const uploadsRoutes        = tryRequire('./routes/uploads');
+const categoryRoutes       = tryRequire('./routes/categories');
+const orderRoutes          = tryRequire('./routes/orders');
+const authRoutes           = tryRequire('./routes/auth');
+const addressesRoutes      = tryRequire('./routes/addresses');
+const variantRoutes        = tryRequire('./routes/variants');
+const publicProductsRoutes = tryRequire('./routes/publicProducts');
+const inventoryRoutes      = tryRequire('./routes/inventory');
+const productImagesRoutes  = tryRequire('./routes/productImages');
+const adminSubcatRoutes    = tryRequire('./routes/adminSubcategories');
+const subcategoryRoutes    = tryRequire('./routes/subcategories');
+const lookupsRouter        = tryRequire('./routes/lookups');
+const dashboardRoutes      = tryRequire('./routes/dashboard');
+const cartRoutes           = tryRequire('./routes/cart');
+const analyticsRoutes      = tryRequire('./routes/analytics');
+const adminUnitsRouter     = tryRequire('./routes/adminUnits');     // ✅
+const publicUnitsRouter    = tryRequire('./routes/publicUnits');    // ✅
+const sizeUnitsRouter      = tryRequire('./routes/sizeUnits');
+const adminSizeUnitsRouter = tryRequire('./routes/adminSizeUnits');
+const meRoutes             = tryRequire('./routes/me');
 
-/* ───────────────────────── Admin Routes ────────────────────── */
-app.use('/api', adminUnitsRouter);
-app.use('/api/size-units', sizeUnitsRouter);
-app.use(['/api/admin/size-units', '/api/admin/sizes'], requireAuth, requireRole(['admin']), adminSizeUnitsRouter);
-app.use(['/api/admin/products', '/admin/products'], requireAuth, requireRole(['admin']), adminProductRoutes);
-app.use(['/api/admin/variants', '/admin/variants'], requireAuth, requireRole(['admin']), adminVariantsRoutes);
-app.use(['/api/admin/subcategories', '/admin/subcategories'], requireAuth, requireRole(['admin']), adminSubcatRoutes);
-app.use(['/api/product-status', '/product-status'], requireAuth, requireRole(['admin']), productStatusRoutes);
+/* ───────────── public mounts ───────────── */
+mount('auth',            ['/api/auth', '/auth'], authRoutes);
+mount('me',              '/api/me', meRoutes);
+mount('categories',      ['/api/categories', '/categories'], categoryRoutes);
+mount('subcategories',   ['/api/subcategories', '/subcategories'], subcategoryRoutes);
+mount('publicProducts',  '/api/products', publicProductsRoutes);
+mount('publicUnits',     '/api', publicUnitsRouter);   // มี GET /api/units
+mount('lookups',         '/api', lookupsRouter);
 
-/* ───────────────────────── Upload/Images Guard ─────────────── */
-const pathStartsWith = (p, prefix) => p === prefix || p.startsWith(prefix + '/');
+/* ───────────── admin/protected mounts ───────────── */
+mount('adminUnits',      '/api', adminUnitsRouter);    // ควรรองรับทั้ง /api/units และ /api/admin/units ภายในไฟล์นี้
+mount('sizeUnits',       '/api/size-units', sizeUnitsRouter);
+mount('adminSizeUnits',  ['/api/admin/size-units','/api/admin/sizes'], adminSizeUnitsRouter, requireAuth, requireRole(['admin']));
+mount('adminProducts',   ['/api/admin/products','/admin/products'], adminProductRoutes, requireAuth, requireRole(['admin']));
+mount('adminVariants',   ['/api/admin/variants','/admin/variants'], adminVariantsRoutes, requireAuth, requireRole(['admin']));
+mount('adminSubcats',    ['/api/admin/subcategories','/admin/subcategories'], adminSubcatRoutes, requireAuth, requireRole(['admin']));
+mount('productStatus',   ['/api/product-status','/product-status'], productStatusRoutes, requireAuth, requireRole(['admin']));
+
+/* ───────────── uploads/images guard ───────────── */
+function pathStartsWith(p, prefix) { return p === prefix || p.startsWith(prefix + '/'); }
 function lockAdminWrites(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   if (pathStartsWith(req.baseUrl + req.path, '/api/upload'))  return next();
   if (pathStartsWith(req.baseUrl + req.path, '/api/uploads')) return next();
   return requireAuth(req, res, () => requireRole(['admin'])(req, res, next));
 }
-app.use(['/api/upload', '/api/uploads'], (req, res, next) => lockAdminWrites(req, res, next), productImagesRoutes);
+if (productImagesRoutes) {
+  app.use(['/api/upload', '/api/uploads'], (req,res,next)=>lockAdminWrites(req,res,next), productImagesRoutes);
+}
 
-/* ───────────────────────── Protected Routes ────────────────── */
-app.use('/api/variants', requireAuth, variantRoutes);
-app.use(['/api/uploads', '/api/upload', '/upload'], requireAuth, uploadsRoutes);
-app.use(['/api/addresses', '/addresses'], requireAuth, addressesRoutes);
-app.use(['/api/user-addresses', '/user-addresses'], requireAuth, addressesRoutes);
-app.use(['/api/orders', '/orders'], requireAuth, orderRoutes);
-app.use('/api/inventory', requireAuth, inventoryRoutes);
-app.use('/api/cart', requireAuth, cartRoutes);
-app.use('/api/analytics', requireAuth, analyticsRoutes);
-app.use('/api/dashboard', requireAuth, dashboardRoutes);
+/* ───────────── protected mounts ───────────── */
+mount('variants',   '/api/variants', variantRoutes, requireAuth);
+mount('uploads',    ['/api/uploads','/api/upload','/upload'], uploadsRoutes, requireAuth);
+mount('addresses',  ['/api/addresses','/addresses'], addressesRoutes, requireAuth);
+mount('user-addresses', ['/api/user-addresses','/user-addresses'], addressesRoutes, requireAuth);
+mount('orders',     ['/api/orders','/orders'], orderRoutes, requireAuth);
+mount('inventory',  '/api/inventory', inventoryRoutes, requireAuth);
+mount('cart',       '/api/cart', cartRoutes, requireAuth);
+mount('analytics',  '/api/analytics', analyticsRoutes, requireAuth);
+mount('dashboard',  '/api/dashboard', dashboardRoutes, requireAuth);
 
-/* ───────────────────────── Route Map Debug ─────────────────── */
+/* ───────────── route map debug ───────────── */
 app.get('/_routes', (_req, res) => {
   const list = [];
   (app._router.stack || []).forEach((s) => {
@@ -165,28 +177,24 @@ app.get('/_routes', (_req, res) => {
   });
   res.type('text').send(list.join('\n'));
 });
-/* ───────────────────────── Shim: orders/new-count ───────────── */
-try {
-  const db = require('./db');
-  app.get('/api/orders/new-count', async (_req, res) => {
-    try {
-      // ถ้ามีคอลัมน์ created_at/status ใช้คิวรีนี้, ถ้าไม่มีจะ fallback เป็น 0
-      const { rows } = await db.query(`
-        SELECT COUNT(*)::int AS count
-        FROM orders
-        WHERE (status IS NULL OR status IN ('new','pending','unpaid'))
-      `).catch(() => ({ rows: [{ count: 0 }] }));
-      res.json({ count: rows?.[0]?.count ?? 0 });
-    } catch {
-      res.json({ count: 0 });
-    }
-  });
-} catch {
-  // กรณีไม่มี ./db ก็คืน 0 ไปก่อน
-  app.get('/api/orders/new-count', (_req, res) => res.json({ count: 0 }));
-}
 
-/* ───────────────────────── Error Handler ───────────────────── */
+/* ───────────── shim: orders/new-count ───────────── */
+const db = tryRequire('./db');
+app.get('/api/orders/new-count', async (_req, res) => {
+  if (!db) return res.json({ count: 0 });
+  try {
+    const { rows } = await db.query(`
+      SELECT COUNT(*)::int AS count
+      FROM orders
+      WHERE (status IS NULL OR status IN ('new','pending','unpaid'))
+    `).catch(() => ({ rows: [{ count: 0 }] }));
+    res.json({ count: rows?.[0]?.count ?? 0 });
+  } catch {
+    res.json({ count: 0 });
+  }
+});
+
+/* ───────────── errors ───────────── */
 app.use((_req, res) => res.status(404).json({ message: 'Not found' }));
 app.use((err, _req, res, _next) => {
   console.error('💥 Unhandled error:', err);
@@ -197,7 +205,7 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json(payload);
 });
 
-/* ───────────────────────── Start Server ────────────────────── */
+/* ───────────── start ───────────── */
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);

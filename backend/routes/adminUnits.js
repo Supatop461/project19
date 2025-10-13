@@ -1,14 +1,13 @@
 // backend/routes/adminUnits.js
-// ✅ Units API (public list + admin CRUD) — รองรับ schema product_units และตอบ JSON ที่หน้าเว็บต้องการ
+// ✅ Units API — list (รวม category_ids), CRUD, toggle publish
+// ✅ รองรับตารางกลาง product_unit_categories (many-to-many)
 
 const express = require('express');
 const router = express.Router();
 
-// ใช้ ../db ตัวเดียว
-let db;
-try { db = require('../db'); } catch { db = require('../db/db'); }
+let db; try { db = require('../db'); } catch { db = require('../db/db'); }
 
-// auth (มีค่อยใช้, ไม่มีไม่บังคับ)
+// auth (optional)
 let requireAuth = (_req, _res, next) => next();
 let requireRole = () => (_req, _res, next) => next();
 try {
@@ -17,204 +16,294 @@ try {
   requireRole = m.requireRole || requireRole;
 } catch {}
 
-console.log('▶ adminUnits router LOADED');
-
-/* -------------------- helpers -------------------- */
-async function hasTable(name) {
-  const { rows } = await db.query(`SELECT to_regclass($1) IS NOT NULL AS ok`, [`public.${name}`]);
+async function hasTable(table) {
+  const { rows } = await db.query(`SELECT to_regclass($1) IS NOT NULL AS ok`, [`public.${table}`]);
   return !!rows?.[0]?.ok;
 }
 async function hasCol(table, col) {
-  const { rows } = await db.query(
-    `SELECT 1 FROM information_schema.columns
-      WHERE table_schema='public' AND table_name=$1 AND column_name=$2 LIMIT 1`,
-    [table, col]
-  );
+  const { rows } = await db.query(`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+    LIMIT 1
+  `, [table, col]);
   return rows.length > 0;
 }
-async function pickCol(table, cands) { for (const c of cands) if (await hasCol(table,c)) return c; return null; }
 
-const asStr  = (v)=> (v==null ? '' : String(v).trim());
-const toBool = (v,d=null)=> v===undefined?d:(v===true||v===1||v==='1'||String(v).toLowerCase()==='true');
-const toArrStr = (x)=> Array.isArray(x)? x.map(String) : null;
+// ตรวจ schema แบบยืดหยุ่น
+async function resolveUnitKeys() {
+  const hasUnitId = await hasCol('product_units','unit_id');
+  const hasId     = await hasCol('product_units','id');
 
-/* -------------------- resolve columns -------------------- */
-async function resolveUnitColumns() {
-  const table = 'product_units';
-  if (!(await hasTable(table))) { const e=new Error('ไม่พบตาราง product_units'); e.status=500; throw e; }
+  const hasCode   = await hasCol('product_units','code');
+  const hasUCode  = await hasCol('product_units','unit_code');
 
-  const textKeys=[]; for (const c of ['code','unit_code']) if(await hasCol(table,c)) textKeys.push(c);
-  const idKeys=[]; for (const c of ['id','unit_id','uid']) if(await hasCol(table,c)) idKeys.push(c);
+  const nameCol   = (await hasCol('product_units','unit_name')) ? 'unit_name'
+                    : (await hasCol('product_units','name'))     ? 'name' : null;
 
-  const nameCol = await pickCol(table, ['unit_name','name','label','title']);
-  const descCol = await pickCol(table, ['description','desc','details','remark']);
-  const pubCol  = await hasCol(table,'is_published') ? 'is_published' : null;
-  const catIdCol  = await hasCol(table,'category_id')  ? 'category_id'  : null;
-  const catIdsCol = await hasCol(table,'category_ids') ? 'category_ids' : null;
+  const descCol   = (await hasCol('product_units','description')) ? 'description' : null;
 
-  if (!textKeys.length && !idKeys.length) { const e=new Error('ไม่พบคีย์หลัก (code/unit_code หรือ id/unit_id/uid)'); e.status=500; throw e; }
-  if (!nameCol) { const e=new Error('ไม่พบคอลัมน์ชื่อหน่วย (unit_name/name/label/title)'); e.status=500; throw e; }
+  const pubCol    = (await hasCol('product_units','is_published')) ? 'is_published'
+                    : (await hasCol('product_units','published'))   ? 'published' : null;
+  const visCol    = (await hasCol('product_units','is_visible')) ? 'is_visible' : null;
+  const actCol    = (await hasCol('product_units','is_active'))  ? 'is_active'  : null;
 
-  return { table, textKeys, idKeys, nameCol, descCol, pubCol, catIdCol, catIdsCol };
-}
+  const catIdCol  = (await hasCol('product_units','category_id'))  ? 'category_id'  : null;
+  const catIdsCol = (await hasCol('product_units','category_ids')) ? 'category_ids' : null;
 
-function buildWhereByCodeOrId(keyParam, cfg, startIndex=1) {
-  const p = asStr(keyParam);
-  const params=[]; const conds=[];
-  for (const col of cfg.textKeys) { params.push(p); conds.push(`LOWER(BTRIM(${col}::text))=LOWER(BTRIM($${startIndex+params.length-1}::text))`); }
-  const asNum = Number(p);
-  if (Number.isFinite(asNum)) for (const col of cfg.idKeys) { params.push(asNum); conds.push(`${col}=$${startIndex+params.length-1}`); }
-  return { sql: conds.length?`(${conds.join(' OR ')})`:'FALSE', params };
-}
-
-function mapRow(r,cfg){
-  const code = cfg.textKeys.length ? asStr(r[cfg.textKeys[0]]) : asStr(r[cfg.idKeys[0]]);
-  const out = {
-    code,
-    unit_name: asStr(r[cfg.nameCol]),
-    description: cfg.descCol ? asStr(r[cfg.descCol]) : '',
-    is_published: cfg.pubCol ? !!r[cfg.pubCol] : true,
-    category_id: cfg.catIdCol ? (r[cfg.catIdCol] ?? null) : null,
+  return {
+    idCols: [hasUnitId ? 'unit_id' : null, hasId ? 'id' : null].filter(Boolean),
+    codeCols: [hasCode ? 'code' : null, hasUCode ? 'unit_code' : null].filter(Boolean),
+    nameCol, descCol, pubCol, visCol, actCol, catIdCol, catIdsCol
   };
-  if (cfg.catIdsCol) out.category_ids = r[cfg.catIdsCol] ?? null;
-  return out;
+}
+const isIntLike = (s) => /^-?\d+$/.test(String(s || '').trim());
+
+// ---------- helpers: category mapping ----------
+async function syncUnitCategoriesIfAny(unitId, categoryIds = []) {
+  const hasPUC = await hasTable('product_unit_categories');
+  if (!hasPUC) return;
+
+  const ids = Array.from(new Set((categoryIds || []).map(String).filter(Boolean)));
+  await db.query(`DELETE FROM product_unit_categories WHERE unit_id = $1`, [unitId]);
+  if (ids.length) {
+    const values = ids.map((_, i) => `($1, $${i + 2})`).join(', ');
+    await db.query(
+      `INSERT INTO product_unit_categories (unit_id, category_id) VALUES ${values}`,
+      [unitId, ...ids]
+    );
+  }
 }
 
-/* -------------------- list (public + alias) -------------------- */
-async function listUnits(req,res,next){
-  try{
-    const cfg = await resolveUnitColumns();
-    const q = asStr(req.query.q||'');
-    const onlyVisible = toBool(req.query.only_visible,null);
-    const published   = toBool(req.query.published,null);
-    const onlyPub = (onlyVisible===true) ? true : (published===true ? true : false);
+async function buildCategoryAggFragment(idCol) {
+  const hasPUC = await hasTable('product_unit_categories');
+  if (!hasPUC || !idCol) return { join: '', sel: `NULL::text[] AS category_ids` };
 
-    const where=[]; const params=[];
-    if(q){
-      params.push(`%${q}%`);
-      const p=`$${params.length}`;
-      const likes=[];
-      if(cfg.textKeys.length) likes.push(`${cfg.textKeys[0]} ILIKE ${p}`);
-      likes.push(`${cfg.nameCol} ILIKE ${p}`);
-      if(cfg.descCol) likes.push(`${cfg.descCol} ILIKE ${p}`);
-      where.push(`(${likes.join(' OR ')})`);
-    }
-    if(onlyPub && cfg.pubCol) where.push(`${cfg.pubCol}=TRUE`);
-    const whereSql = where.length?`WHERE ${where.join(' AND ')}`:'';
-
-    const order2 = cfg.idKeys[0] || cfg.textKeys[0] || cfg.nameCol;
-    const { rows } = await db.query(
-      `SELECT * FROM ${cfg.table} ${whereSql} ORDER BY ${cfg.nameCol} NULLS LAST, ${order2}`,
-      params
-    );
-    const items = rows.map(r=>mapRow(r,cfg));
-
-    // ✅ รองรับทั้งรูปแบบ object และ array ตามที่หน้าเว็บคาด
-    if (req.query.raw === '1') return res.json(items);
-    return res.json({ ok: true, success: true, data: items, rows: items, items, total: items.length });
-  }catch(err){ console.error('❌ listUnits:', err.message); next(err); }
+  const join = `
+    LEFT JOIN LATERAL (
+      SELECT ARRAY_AGG(puc.category_id::text ORDER BY puc.category_id) AS category_ids
+      FROM product_unit_categories puc
+      WHERE puc.unit_id = pu.${idCol}
+    ) _puc ON TRUE
+  `;
+  return { join, sel: `COALESCE(_puc.category_ids, ARRAY[]::text[]) AS category_ids` };
 }
 
-router.get('/units', listUnits);
-router.get('/admin/units', listUnits);
+// ---------- list (public/admin shared) ----------
+async function listUnitsHandler(req, res) {
+  try {
+    if (!(await hasTable('product_units'))) return res.json([]);
 
-/* -------------------- create -------------------- */
-router.post('/admin/units', requireAuth, requireRole(['admin','staff']), async (req,res,next)=>{
-  try{
-    const cfg = await resolveUnitColumns();
-    if(!cfg.textKeys.length) return res.status(400).json({ error:'ตารางนี้ไม่มีคีย์ข้อความ (code/unit_code)' });
+    const K = await resolveUnitKeys();
+    const idCol   = K.idCols[0] || null;
+    const codeCol = K.codeCols[0] || null;
 
-    const code = asStr(req.body.code).toLowerCase();
-    const unit_name = asStr(req.body.unit_name || req.body.name || '');
-    const description = asStr(req.body.description || '');
-    const is_published = toBool(req.body.is_published,true);
-    const category_id  = (req.body.category_id !== undefined) ? req.body.category_id : null;
-    const category_ids = toArrStr(req.body.category_ids);
+    const cols = [];
+    if (idCol)   cols.push(`pu.${idCol} AS ${idCol}`);
+    if (codeCol) cols.push(`pu.${codeCol} AS ${codeCol}`);
+    cols.push(K.nameCol ? `pu.${K.nameCol} AS unit_name` : `''::text AS unit_name`);
+    if (K.descCol) cols.push(`pu.${K.descCol} AS description`);
+    if (K.catIdCol)  cols.push(`pu.${K.catIdCol} AS category_id`);
+    if (K.pubCol) cols.push(`COALESCE(pu.${K.pubCol}, TRUE) AS is_published`);
+    if (K.visCol) cols.push(`COALESCE(pu.${K.visCol}, TRUE) AS is_visible`);
+    if (K.actCol) cols.push(`COALESCE(pu.${K.actCol}, TRUE) AS is_active`);
 
-    if(!code) return res.status(400).json({ error:'ต้องระบุ code' });
-    if(!/^[a-z][a-z0-9_-]*$/i.test(code)) return res.status(400).json({ error:'รูปแบบ code ไม่ถูกต้อง' });
-    if(!unit_name) return res.status(400).json({ error:'ต้องระบุ unit_name' });
+    const catAgg = await buildCategoryAggFragment(idCol);
+    cols.push(catAgg.sel);
 
-    const dupWhere = cfg.textKeys.map(c=>`LOWER(BTRIM(${c}::text))=LOWER(BTRIM($1::text))`).join(' OR ');
-    const dup = await db.query(`SELECT 1 FROM ${cfg.table} WHERE ${dupWhere} LIMIT 1`, [code]);
-    if(dup.rowCount) return res.status(409).json({ error:'DUPLICATE_CODE', code });
-
-    const cols=[cfg.textKeys[0], cfg.nameCol]; const args=[code, unit_name];
-    if(cfg.descCol){ cols.push(cfg.descCol); args.push(description); }
-    if(cfg.pubCol){ cols.push(cfg.pubCol); args.push(!!is_published); }
-    if(cfg.catIdCol){ cols.push(cfg.catIdCol); args.push(category_id); }
-    if(cfg.catIdsCol){ cols.push(cfg.catIdsCol); args.push(category_ids ? JSON.stringify(category_ids) : null); }
-
-    const ph=cols.map((_,i)=>`$${i+1}`);
-    const { rows } = await db.query(
-      `INSERT INTO ${cfg.table} (${cols.join(',')}) VALUES (${ph.join(',')}) RETURNING *`,
-      args
-    );
-    const item = mapRow(rows[0],cfg);
-    return res.status(201).json({ ok:true, success:true, data:item });
-  }catch(err){ console.error('❌ create unit:', err.message); next(err); }
-});
-
-/* -------------------- update -------------------- */
-router.put('/admin/units/:code', requireAuth, requireRole(['admin','staff']), async (req,res,next)=>{
-  try{
-    const cfg = await resolveUnitColumns();
-    const keyParam = asStr(req.params.code);
-    const fnd = buildWhereByCodeOrId(keyParam,cfg,1);
-    const cur = await db.query(`SELECT * FROM ${cfg.table} WHERE ${fnd.sql} LIMIT 1`, fnd.params);
-    if(!cur.rowCount) return res.status(404).json({ error:'ไม่พบหน่วย' });
-
-    const unit_name    = (req.body.unit_name !== undefined)    ? asStr(req.body.unit_name) : undefined;
-    const description  = (req.body.description !== undefined)  ? asStr(req.body.description) : undefined;
-    const is_published = (req.body.is_published !== undefined) ? toBool(req.body.is_published) : undefined;
-    const category_id  = (req.body.category_id !== undefined)  ? req.body.category_id : undefined;
-    const category_ids = (req.body.category_ids !== undefined) ? toArrStr(req.body.category_ids) : undefined;
-
-    const newCodeRaw = (req.body.code !== undefined) ? asStr(req.body.code) : undefined;
-    const newCode = newCodeRaw !== undefined ? newCodeRaw.toLowerCase() : undefined;
-
-    const sets=[]; const args=[];
-    if(unit_name !== undefined){ sets.push(`${cfg.nameCol}=$${sets.length+1}`); args.push(unit_name); }
-    if(cfg.descCol && description !== undefined){ sets.push(`${cfg.descCol}=$${sets.length+1}`); args.push(description); }
-    if(cfg.pubCol && is_published !== undefined){ sets.push(`${cfg.pubCol}=$${sets.length+1}`); args.push(!!is_published); }
-    if(cfg.catIdCol && category_id !== undefined){ sets.push(`${cfg.catIdCol}=$${sets.length+1}`); args.push(category_id); }
-    if(cfg.catIdsCol && category_ids !== undefined){ sets.push(`${cfg.catIdsCol}=$${sets.length+1}`); args.push(category_ids ? JSON.stringify(category_ids) : null); }
-
-    if(newCode !== undefined){
-      if(!cfg.textKeys.length) return res.status(400).json({ error:'ตารางนี้ไม่รองรับการแก้ไข code' });
-      if(!newCode) return res.status(400).json({ error:'code ใหม่ว่างเปล่า' });
-      if(!/^[a-z][a-z0-9_-]*$/i.test(newCode)) return res.status(400).json({ error:'รูปแบบ code ใหม่ไม่ถูกต้อง' });
-
-      const dupConds = cfg.textKeys.map(c=>`LOWER(BTRIM(${c}::text))=LOWER(BTRIM($1::text))`).join(' OR ');
-      const whereOld = buildWhereByCodeOrId(keyParam,cfg,2);
-      const dup = await db.query(
-        `SELECT 1 FROM ${cfg.table} WHERE (${dupConds}) AND NOT (${whereOld.sql}) LIMIT 1`,
-        [newCode, ...whereOld.params]
-      );
-      if(dup.rowCount) return res.status(409).json({ error:'DUPLICATE_CODE', code:newCode });
-
-      sets.push(`${cfg.textKeys[0]}=$${sets.length+1}`);
-      args.push(newCode);
+    const onlyVisible = req.query.only_visible === '1' || req.query.visible === '1';
+    const where = [];
+    if (onlyVisible) {
+      if (K.visCol) where.push(`COALESCE(pu.${K.visCol}, TRUE) = TRUE`);
+      else if (K.pubCol) where.push(`COALESCE(pu.${K.pubCol}, TRUE) = TRUE`);
+      else if (K.actCol) where.push(`COALESCE(pu.${K.actCol}, TRUE) = TRUE`);
     }
 
-    if(!sets.length) return res.status(400).json({ error:'ไม่มีข้อมูลที่จะแก้ไข' });
+    const sql = `
+      SELECT ${cols.join(', ')}
+      FROM product_units pu
+      ${catAgg.join}
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY 1 ASC
+    `;
+    const { rows } = await db.query(sql);
 
-    const whereUpd = buildWhereByCodeOrId(keyParam,cfg,args.length+1);
-    await db.query(`UPDATE ${cfg.table} SET ${sets.join(', ')} WHERE ${whereUpd.sql}`, [...args, ...whereUpd.params]);
-    return res.json({ ok:true, success:true });
-  }catch(err){ console.error('❌ update unit:', err.message); next(err); }
+    const items = rows.map(r => ({
+      ...r,
+      code: codeCol ? (r[codeCol] ?? r.code) : (r.code ?? null),
+      unit_id: idCol ? r[idCol] : (r.unit_id ?? r.id ?? null),
+      category_ids: Array.isArray(r.category_ids) ? r.category_ids : (r.category_id ? [String(r.category_id)] : []),
+    }));
+
+    if (req.query.debug === '1') {
+      return res.json({
+        keys: K,
+        onlyVisible,
+        sql: sql.replace(/\s+/g,' ').trim(),
+        count: items.length,
+        sample: items.slice(0,5),
+      });
+    }
+    res.json(items);
+  } catch (e) {
+    console.error('❌ list units error:', e);
+    res.status(500).json({ message: 'List units error' });
+  }
+}
+
+// ---------- build WHERE by key ----------
+async function buildWhereByKey(key, startIndex = 0) {
+  const K = await resolveUnitKeys();
+  const params = [];
+  const ors = [];
+
+  if (isIntLike(key) && K.idCols.length) {
+    params.push(parseInt(key, 10));
+    const p = `$${startIndex + params.length}`;
+    ors.push(...K.idCols.map(c => `pu.${c} = ${p}`));
+  }
+  const keyTxt = String(key).trim().toLowerCase();
+  if (K.codeCols.length) {
+    params.push(keyTxt);
+    const p = `$${startIndex + params.length}`;
+    ors.push(...K.codeCols.map(c => `LOWER(pu.${c}) = ${p}`));
+  }
+
+  if (!ors.length) return null;
+  return { where: `(${ors.join(' OR ')})`, params };
+}
+
+// ---------- create ----------
+router.post('/admin/units', async (req, res) => {
+  try {
+    if (!(await hasTable('product_units'))) return res.status(400).json({ message: 'product_units not found' });
+    const K = await resolveUnitKeys();
+    if (!K.nameCol) return res.status(400).json({ message: 'unit_name column not found' });
+
+    let { code, unit_name, description, category_id, category_ids, is_published } = req.body || {};
+    code = (code ?? '').trim().toLowerCase();
+    unit_name = (unit_name ?? '').trim();
+    if (!code || !unit_name) return res.status(400).json({ message: 'กรอก code และ unit_name ให้ครบ' });
+
+    const cols = [K.nameCol]; const vals = [unit_name]; const phs = ['$1']; let i = 1;
+    if (K.codeCols.length) { i++; cols.push(K.codeCols[0]); vals.push(code); phs.push(`$${i}`); }
+    if (K.descCol)         { i++; cols.push(K.descCol);     vals.push(description ?? null); phs.push(`$${i}`); }
+    if (K.catIdCol)        { i++; cols.push(K.catIdCol);    vals.push(category_id ?? null); phs.push(`$${i}`); }
+    if (K.catIdsCol)       { i++; cols.push(K.catIdsCol);   vals.push(Array.isArray(category_ids) ? category_ids : null); phs.push(`$${i}`); }
+    if (K.pubCol)          { i++; cols.push(K.pubCol);      vals.push(is_published === undefined ? true : !!is_published); phs.push(`$${i}`); }
+    if (K.visCol)          { i++; cols.push(K.visCol);      vals.push(true); phs.push(`$${i}`); }
+
+    const { rows } = await db.query(
+      `INSERT INTO product_units (${cols.join(',')}) VALUES (${phs.join(',')}) RETURNING *`,
+      vals
+    );
+    const row = rows[0];
+
+    // sync ตารางกลาง
+    const idCol = (K.idCols[0] || 'id');
+    const unitId = row[idCol] ?? row.unit_id ?? row.id;
+    await syncUnitCategoriesIfAny(unitId, Array.isArray(category_ids) ? category_ids : (category_id ? [category_id] : []));
+
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('❌ create unit error:', e);
+    const msg = e?.code === '23505' ? 'ข้อมูลซ้ำ (unique)' : 'Create unit error';
+    res.status(500).json({ message: msg });
+  }
 });
 
-/* -------------------- delete -------------------- */
-router.delete('/admin/units/:code', requireAuth, requireRole(['admin','staff']), async (req,res,next)=>{
-  try{
-    const cfg = await resolveUnitColumns();
-    const keyParam = asStr(req.params.code);
-    const whereDel = buildWhereByCodeOrId(keyParam,cfg,1);
-    const { rowCount } = await db.query(`DELETE FROM ${cfg.table} WHERE ${whereDel.sql}`, whereDel.params);
-    if(!rowCount) return res.status(404).json({ error:'ไม่พบหน่วย' });
-    return res.json({ ok:true, success:true });
-  }catch(err){ console.error('❌ delete unit:', err.message); next(err); }
+// ---------- update ----------
+router.put('/admin/units/:key', async (req, res) => {
+  try {
+    if (!(await hasTable('product_units'))) return res.status(400).json({ message: 'product_units not found' });
+
+    const K = await resolveUnitKeys();
+    const sets = [];
+    const vals = [];
+    let i = 0;
+
+    // ห้ามใส่ alias pu. ใน SET
+    const push = (col, v) => { i++; sets.push(`${col} = $${i}`); vals.push(v); };
+
+    const { code, unit_name, description, category_id, category_ids, is_published } = (req.body || {});
+    if (unit_name !== undefined && K.nameCol)     push(`${K.nameCol}`, (unit_name ?? '').trim());
+    if (code !== undefined && K.codeCols.length)  push(`${K.codeCols[0]}`, String(code || '').toLowerCase());
+    if (description !== undefined && K.descCol)   push(`${K.descCol}`, description ?? null);
+    if (category_id !== undefined && K.catIdCol)  push(`${K.catIdCol}`, category_id ?? null);
+    if (K.catIdsCol && category_ids !== undefined)push(`${K.catIdsCol}`, Array.isArray(category_ids) ? category_ids : null);
+    if (is_published !== undefined && K.pubCol)   push(`${K.pubCol}`, !!is_published);
+
+    if (!sets.length && category_ids === undefined) return res.status(400).json({ message: 'ไม่มีฟิลด์ให้แก้ไข' });
+
+    const match = await buildWhereByKey(req.params.key, i);
+    if (!match) return res.status(400).json({ message: 'Invalid key' });
+
+    let row;
+    if (sets.length) {
+      const { rows } = await db.query(`
+        UPDATE product_units pu
+        SET ${sets.join(', ')}
+        WHERE ${match.where}
+        RETURNING *
+      `, [...vals, ...match.params]);
+      if (!rows.length) return res.status(404).json({ message: 'ไม่พบหน่วย' });
+      row = rows[0];
+    } else {
+      const { rows } = await db.query(`
+        SELECT * FROM product_units pu
+        WHERE ${match.where}
+        LIMIT 1
+      `, match.params);
+      if (!rows.length) return res.status(404).json({ message: 'ไม่พบหน่วย' });
+      row = rows[0];
+    }
+
+    // sync ตารางกลางจาก category_ids (ถ้ามี)
+    if (category_ids !== undefined) {
+      const idCol = (K.idCols[0] || 'id');
+      const unitId = row[idCol] ?? row.unit_id ?? row.id;
+      await syncUnitCategoriesIfAny(unitId, Array.isArray(category_ids) ? category_ids : []);
+    }
+
+    res.json(row);
+  } catch (e) {
+    console.error('❌ update unit error:', e);
+    const msg = e?.code === '23505' ? 'ข้อมูลซ้ำ (unique)' : 'Update unit error';
+    res.status(500).json({ message: msg });
+  }
 });
+
+// ---------- delete (ลบ mapping ด้วย) ----------
+router.delete('/admin/units/:key', async (req, res) => {
+  try {
+    if (!(await hasTable('product_units'))) return res.status(400).json({ message: 'product_units not found' });
+
+    const pre = await buildWhereByKey(req.params.key, 0);
+    if (!pre) return res.status(400).json({ message: 'Invalid key' });
+    const { rows: found } = await db.query(`SELECT * FROM product_units pu WHERE ${pre.where} LIMIT 1`, pre.params);
+    if (!found.length) return res.status(404).json({ message: 'ไม่พบหน่วย' });
+
+    const K = await resolveUnitKeys();
+    const idCol = (K.idCols[0] || 'id');
+    const unitId = found[0][idCol] ?? found[0].unit_id ?? found[0].id;
+
+    const hasPUC = await hasTable('product_unit_categories');
+    if (hasPUC) await db.query(`DELETE FROM product_unit_categories WHERE unit_id = $1`, [unitId]);
+
+    const r = await db.query(`
+      DELETE FROM product_units pu
+      WHERE ${pre.where}
+      RETURNING 1
+    `, pre.params);
+
+    if (!r.rowCount) return res.status(404).json({ message: 'ไม่พบหน่วย' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('❌ delete unit error:', e);
+    res.status(500).json({ message: 'Delete unit error' });
+  }
+});
+
+// ---------- aliases ----------
+router.get(['/units','/admin/units'], listUnitsHandler);
 
 module.exports = router;

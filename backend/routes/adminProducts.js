@@ -212,9 +212,46 @@ router.get('/', nocache, async (req, res)  => {
     `;
 
     const { rows } = await db.query(sql, params);
-    const total = rows.length ? Number(rows[0].__total) : 0;
-    const items = rows.map(({ __total, ...rest }) => rest);
-    res.json({ items, total, page: pInt, page_size: psInt });
+const total = rows.length ? Number(rows[0].__total) : 0;
+
+const items = [];
+for (const r of rows) {
+  const stock = Number(r.stock ?? 0);
+
+  // --- ตรวจสอบสถานะตาม stock ---
+  if (stock <= 0) {
+    // สินค้าหมด
+    r.product_status_name = 'สินค้าหมด';
+    // อัปเดตฐานข้อมูลให้ตรง
+    try {
+      await db.query(
+        `UPDATE products
+         SET product_status_id = (
+           SELECT product_status_id FROM product_statuses
+           WHERE status_name ILIKE 'สินค้าหมด' LIMIT 1
+         )
+         WHERE product_id = $1`,
+        [r.product_id]
+      );
+    } catch (e) {
+      console.warn('⚠ อัปเดตสถานะสินค้าเป็น "หมด" ไม่สำเร็จ:', e.message);
+    }
+  } else if (stock > 0 && stock <= 5) {
+    // สต็อกใกล้หมด
+    r.product_status_name = 'สต็อกใกล้หมด';
+
+    // แจ้งเตือน (ตอนนี้แค่ console log, ถ้าอยากส่งอีเมล/แจ้งผ่าน dashboard ก็เพิ่มภายหลังได้)
+    console.warn(`⚠ สินค้าใกล้หมด: ${r.product_name} (เหลือ ${stock})`);
+  } else {
+    // พร้อมจำหน่าย
+    r.product_status_name = 'พร้อมจำหน่าย';
+  }
+
+  items.push(r);
+}
+
+res.json({ items, total, page: pInt, page_size: psInt });
+
   } catch (error) {
     console.error('❌ ERROR: ดึงข้อมูลสินค้าไม่สำเร็จ:', error);
     res.status(500).json({ error: 'Database error' });

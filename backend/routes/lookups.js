@@ -1,6 +1,7 @@
 // backend/routes/lookups.js
-// ส่ง lookups สำหรับหน้าแอดมิน (categories / subcategories / product_units / size_units / order_statuses)
-// ไม่แก้ schema — ตรวจคอลัมน์ก่อน แล้วประกอบ SQL ให้เหมาะกับแต่ละฐานข้อมูล
+// ✅ ส่ง lookups สำหรับหน้าแอดมิน: categories / subcategories / product_units / size_units / order_statuses
+// - รองรับ schema ยืดหยุ่น (id | unit_id, unit_name | name)
+// - ไม่ยุ่งกับตารางกลาง (พอสำหรับ dropdown/lookup)
 
 const express = require('express');
 const router = express.Router();
@@ -8,7 +9,6 @@ const router = express.Router();
 let db;
 try { db = require('../db'); } catch { db = require('../db/db'); }
 
-/* ---------- helpers ---------- */
 async function hasColumn(table, col) {
   const { rows } = await db.query(`
     SELECT 1
@@ -18,13 +18,16 @@ async function hasColumn(table, col) {
   `, [table, col]);
   return rows.length > 0;
 }
-
+async function hasTable(table) {
+  const { rows } = await db.query(`SELECT to_regclass($1) IS NOT NULL AS ok`, [`public.${table}`]);
+  return !!rows?.[0]?.ok;
+}
 function boolFilter(col, wantTrue) {
   if (!wantTrue) return '1=1';
   return `COALESCE(${col}, TRUE) = TRUE`;
 }
 
-/* ---------- queries (compose by schema) ---------- */
+/* ---------- Product Categories ---------- */
 async function getProductCategories() {
   const hasIsPub = await hasColumn('product_categories', 'is_published');
   const cols = [
@@ -42,6 +45,7 @@ async function getProductCategories() {
   return rows;
 }
 
+/* ---------- Subcategories ---------- */
 async function getSubcategories(wantPublished) {
   const hasIsPub = await hasColumn('subcategories', 'is_published');
   const cols = [
@@ -62,30 +66,43 @@ async function getSubcategories(wantPublished) {
   return rows;
 }
 
+/* ---------- Units (generic for product_units & size_units) ---------- */
 async function getUnits(table, idAlias, wantPublished) {
-  const hasIsPub = await hasColumn(table, 'is_published');
+  if (!(await hasTable(table))) return [];
+
+  const hasUnitId = await hasColumn(table, 'unit_id');
+  const hasId     = await hasColumn(table, 'id');
+  const idCol     = hasUnitId ? 'unit_id' : (hasId ? 'id' : null);
+
+  const hasUName  = await hasColumn(table, 'unit_name');
+  const hasName   = await hasColumn(table, 'name');
+  const nameCol   = hasUName ? 'unit_name' : (hasName ? 'name' : null);
+
+  const hasIsPub  = await hasColumn(table, 'is_published');
+
   const cols = [
-    'id AS ' + idAlias,
-    'unit_name',
+    idCol ? `${idCol} AS ${idAlias}` : `NULL::int AS ${idAlias}`,
+    nameCol ? `${nameCol} AS unit_name` : `''::text AS unit_name`,
     hasIsPub ? 'COALESCE(is_published, TRUE) AS is_published' : 'TRUE AS is_published'
   ].join(', ');
+
   const where = hasIsPub ? `WHERE ${boolFilter('is_published', wantPublished)}` : '';
   const sql = `
     SELECT ${cols}
     FROM ${table}
     ${where}
-    ORDER BY unit_name ASC, id ASC
+    ORDER BY ${nameCol || idCol || '1'} ASC, ${idCol || '1'} ASC
   `;
   const { rows } = await db.query(sql);
   return rows;
 }
 
+/* ---------- Order Statuses ---------- */
 async function getOrderStatuses(wantActive) {
   const hasStatusName = await hasColumn('order_statuses', 'status_name');
   const hasName       = await hasColumn('order_statuses', 'name');
   const hasIsActive   = await hasColumn('order_statuses', 'is_active');
 
-  // map ชื่อคอลัมน์สถานะให้เหลือชื่อเดียวคือ status_name
   const statusLabel = hasStatusName
     ? 'status_name'
     : (hasName ? 'name AS status_name' : `'Status' AS status_name`);
@@ -107,9 +124,9 @@ async function getOrderStatuses(wantActive) {
   return rows;
 }
 
-/* ---------- route ---------- */
+/* ---------- Route ---------- */
 router.get('/lookups', async (req, res) => {
-  // 🔒 กัน cache: บังคับให้ดึงข้อมูลใหม่ทุกครั้ง (แก้ปัญหา 304/Not Modified)
+  // กัน cache
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
@@ -127,8 +144,8 @@ router.get('/lookups', async (req, res) => {
       getProductCategories(),
       getSubcategories(wantPublished),
       getUnits('product_units', 'unit_id', wantPublished),
-      getUnits('size_units', 'size_unit_id', wantPublished),
-      getOrderStatuses(wantPublished) // ใช้ตัวเดียวเป็น active filter
+      getUnits('size_units',    'size_unit_id', wantPublished),
+      getOrderStatuses(wantPublished)
     ]);
 
     res.json({

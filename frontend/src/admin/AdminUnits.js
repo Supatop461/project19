@@ -1,20 +1,19 @@
 // src/admin/AdminUnits.js
-// ✅ หน่วยสินค้า (product_units) — ฝั่งแอดมิน
-// Endpoints ใช้จริงตอนนี้:
-//   GET    /api/admin/units[?only_visible=1]
-//   POST   /api/admin/units
-//   PUT    /api/admin/units/:code       // :code รองรับเลข id ได้
-//   DELETE /api/admin/units/:code
+// ✅ หน่วยสินค้า (product_units) — ฝั่งแอดมิน (รองรับหลายหมวด)
+// ใช้ BASE URL ชัดเจน ปลอดภัยพอร์ต 3001
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import './admin-units.css';
+
+const API_BASE =
+  process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') ||
+  'http://localhost:3001';
 
 const asStr = (v) => (v === null || v === undefined) ? '' : String(v).trim();
 const toArr = (x) => Array.isArray(x) ? x : (x ? [x] : []);
 const uniq = (xs) => Array.from(new Set(xs));
 
-/* ---------- Toggle Button Group (multi) ---------- */
 function MultiToggle({ options, value = [], onChange }) {
   const set = new Set((value || []).map(String));
   const toggle = (id) => {
@@ -45,7 +44,7 @@ function MultiToggle({ options, value = [], onChange }) {
   );
 }
 
-/* ---------- API helpers (ใช้ fetch โดยตรง) ---------- */
+/* ---------- API helpers ---------- */
 async function httpJSON(method, url, body) {
   const res = await fetch(url, {
     method,
@@ -59,37 +58,29 @@ async function httpJSON(method, url, body) {
   }
   return res.json().catch(() => ({}));
 }
-const listUnits = async (params = {}) => {
-  const qs = new URLSearchParams();
-  if (params.only_visible) qs.set('only_visible', '1');
-  const url = `/api/admin/units${qs.toString() ? `?${qs}` : ''}`;
-  return httpJSON('GET', url);
-};
-const createUnitAPI = (payload) => httpJSON('POST', '/api/admin/units', payload);
-const updateUnitAPI = (codeOrId, payload) => httpJSON('PUT', `/api/admin/units/${encodeURIComponent(codeOrId)}`, payload);
-const deleteUnitAPI = (codeOrId) => httpJSON('DELETE', `/api/admin/units/${encodeURIComponent(codeOrId)}`);
 
-/* หาคีย์สำหรับ row (code เป็นหลัก, ถ้าไม่มีค่อยใช้ unit_id/id) */
+const listUnits       = async () => {
+  try { return await httpJSON('GET', `${API_BASE}/api/admin/units`); }
+  catch (e) { if (e?.status === 404) return await httpJSON('GET', `${API_BASE}/api/units`); throw e; }
+};
+const createUnitAPI   = (payload)      => httpJSON('POST',   `${API_BASE}/api/admin/units`, payload);
+const updateUnitAPI   = (key, payload) => httpJSON('PUT',    `${API_BASE}/api/admin/units/${encodeURIComponent(key)}`, payload);
+const deleteUnitAPI   = (key)          => httpJSON('DELETE', `${API_BASE}/api/admin/units/${encodeURIComponent(key)}`);
+const listCategories  = ()             => httpJSON('GET',    `${API_BASE}/api/categories?published=1`);
+
 const unitKey = (u) => u?.code ?? (u?.unit_id ?? u?.id ?? '');
 
+/* ---------- Component ---------- */
 export default function AdminUnits() {
   const [loading, setLoading] = useState(false);
-  const [categories, setCategories] = useState([]); // [{value,label}]
+  const [categories, setCategories] = useState([]);
   const [units, setUnits] = useState([]);
-  const [filter, setFilter] = useState('');
-  const [onlyVisible, setOnlyVisible] = useState(false);
+  const [form, setForm] = useState({ code: '', unit_name: '', description: '', category_ids: [] });
+  const [editing, setEditing] = useState(null);
 
-  const [form, setForm] = useState({
-    code: '',
-    unit_name: '',
-    description: '',
-    category_ids: [], // array of TEXT ids
-  });
-  const [editing, setEditing] = useState(null); // เก็บแถวที่กำลังแก้ไข (ใช้ code เป็นหลัก)
-
-  // ====== focus helpers ======
   const formWrapRef = useRef(null);
   const unitNameInputRef = useRef(null);
+
   const focusForm = () => {
     const target = unitNameInputRef.current || formWrapRef.current;
     if (!target) return;
@@ -99,16 +90,12 @@ export default function AdminUnits() {
     setTimeout(() => formWrapRef.current?.classList.remove('flash-focus'), 700);
   };
 
-  /* ---------- helpers ---------- */
   const setField = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
   function extractCategoryIds(u) {
-    if (Array.isArray(u?.category_ids) && u.category_ids.length) {
-      return u.category_ids.map(String);
-    }
-    if (Array.isArray(u?.categories) && u.categories.length) {
+    if (Array.isArray(u?.category_ids) && u.category_ids.length) return u.category_ids.map(String);
+    if (Array.isArray(u?.categories) && u.categories.length)
       return u.categories.map(c => String(c.category_id ?? c.id ?? c.code));
-    }
     if (u?.category_id) return [String(u.category_id)];
     return [];
   }
@@ -116,21 +103,17 @@ export default function AdminUnits() {
   const isPublishedOn = (u) =>
     (u?.is_visible !== false) && (u?.is_active !== false) && (u?.is_published !== false);
 
-  /* ---------- load categories + units ---------- */
   async function loadAll() {
     setLoading(true);
     try {
-      // categories (published อย่างเดียว)
-      const catRes = await fetch('/api/categories?published=1', { credentials: 'include' });
-      const catJson = await catRes.json();
+      const catJson = await listCategories().catch(() => []);
       const cats = (Array.isArray(catJson) ? catJson : []).map(c => ({
         value: String(c.category_id ?? c.id ?? c.code),
         label: `${c.category_id ?? c.id ?? c.code} — ${c.category_name ?? c.name}`,
       }));
       setCategories(cats);
 
-      // units (admin list — alias ไป handler เดียวกับ /api/units)
-      const data = await listUnits({ only_visible: onlyVisible ? 1 : undefined });
+      const data = await listUnits();
       setUnits(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -140,34 +123,7 @@ export default function AdminUnits() {
     }
   }
 
-  async function refreshUnits() {
-    try {
-      const data = await listUnits({ only_visible: onlyVisible ? 1 : undefined });
-      setUnits(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error(e);
-      alert('โหลดรายการหน่วยไม่สำเร็จ');
-    }
-  }
-
   useEffect(() => { loadAll(); }, []);
-  useEffect(() => { refreshUnits(); }, [onlyVisible]); // เปลี่ยน filter แล้วโหลดใหม่
-
-  const rows = useMemo(() => {
-    const q = asStr(filter).toLowerCase();
-    return (units || []).filter(u =>
-      !q ||
-      asStr(u.code).toLowerCase().includes(q) ||
-      asStr(u.unit_name).toLowerCase().includes(q) ||
-      asStr(u.description).toLowerCase().includes(q)
-    );
-  }, [units, filter]);
-
-  function startCreate() {
-    setEditing(null);
-    setForm({ code: '', unit_name: '', description: '', category_ids: [] });
-    setTimeout(focusForm, 0);
-  }
 
   function startEdit(u) {
     setEditing(u);
@@ -184,29 +140,19 @@ export default function AdminUnits() {
     e?.preventDefault?.();
     const ids = uniq(toArr(form.category_ids).map(String));
     const codeLower = asStr(form.code).toLowerCase();
-
     const payload = {
       code: codeLower,
       unit_name: asStr(form.unit_name),
       description: asStr(form.description) || null,
-      // backend รองรับทั้ง category_id/ids ถ้ามีคอลัมน์
       category_id: ids.length ? ids[0] : null,
       category_ids: ids,
     };
-
-    if (!payload.code || !payload.unit_name) {
-      alert('กรอก code และ unit name ให้ครบ');
-      return;
-    }
-
+    if (!payload.code || !payload.unit_name) return alert('กรอก code และ unit name ให้ครบ');
     setLoading(true);
     try {
-      if (editing?.code) {
-        await updateUnitAPI(editing.code, payload);
-      } else {
-        await createUnitAPI(payload);
-      }
-      await refreshUnits();
+      if (editing) await updateUnitAPI(unitKey(editing), payload);
+      else await createUnitAPI(payload);
+      await loadAll();
       setEditing(null);
       setForm({ code: '', unit_name: '', description: '', category_ids: [] });
     } catch (e2) {
@@ -225,7 +171,7 @@ export default function AdminUnits() {
     setLoading(true);
     try {
       await deleteUnitAPI(key);
-      await refreshUnits();
+      await loadAll();
     } catch (e) {
       console.error(e);
       alert(e?.response?.data?.message || e?.response?.data?.error || 'ลบไม่สำเร็จ');
@@ -240,8 +186,9 @@ export default function AdminUnits() {
     setLoading(true);
     try {
       const next = !isPublishedOn(row);
+      // ส่งเฉพาะ is_published ก็พอ (ไฟล์ backend รองรับ)
       await updateUnitAPI(key, { is_published: next });
-      await refreshUnits();
+      await loadAll();
     } catch (e) {
       console.error(e);
       alert(e?.response?.data?.message || e?.response?.data?.error || 'อัปเดตสถานะเผยแพร่ไม่สำเร็จ');
@@ -254,33 +201,10 @@ export default function AdminUnits() {
     <div className="page page-wide">
       <div className="page-head">
         <p><Link to="/admin">← กลับไปจัดการสินค้า</Link></p>
-        <h2>จัดการหน่วยสินค้า (จากฐานข้อมูล)</h2>
+        <h2>จัดการหน่วยสินค้า </h2>
       </div>
 
-      {/* ───────────── Toolbar ───────────── */}
-      <div className="card" style={{ marginBottom: 12, padding: 12 }}>
-        <div className="toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input
-            className="search"
-            placeholder="ค้นหา: code / unit_name / description"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            style={{ flex: 1, minWidth: 240 }}
-          />
-          <label className="chk" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="checkbox"
-              checked={onlyVisible}
-              onChange={(e) => setOnlyVisible(e.target.checked)}
-            />
-            เฉพาะที่แสดงผล (visible)
-          </label>
-          <button onClick={refreshUnits} disabled={loading}>รีเฟรช</button>
-          <button className="btn-primary" onClick={startCreate} disabled={loading}>+ เพิ่มหน่วย</button>
-        </div>
-      </div>
-
-      {/* ───────────── Form ───────────── */}
+      {/* Form */}
       <form ref={formWrapRef} className="card unit-form-card" onSubmit={doSubmit} autoComplete="off">
         <div className="form-row">
           <label>code (เช่น: piece, pot) [a-z]</label>
@@ -288,7 +212,7 @@ export default function AdminUnits() {
             value={form.code}
             onChange={e => setField('code', e.target.value)}
             placeholder="เช่น pot, bag, kg"
-            disabled={!!editing?.code} /* กำลังแก้ไข ห้ามแก้ code เพื่อลดปัญหา duplicate */
+            disabled={!!editing?.code}
           />
         </div>
 
@@ -339,7 +263,7 @@ export default function AdminUnits() {
         </div>
       </form>
 
-      {/* ───────────── Units Table ───────────── */}
+      {/* Table */}
       <div className="table card">
         <div className="table-scroll">
           <table className="tbl-units">
@@ -360,7 +284,7 @@ export default function AdminUnits() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((u) => {
+              {units.map((u) => {
                 const ids = extractCategoryIds(u);
                 const on = isPublishedOn(u);
                 const key = unitKey(u);
@@ -392,7 +316,7 @@ export default function AdminUnits() {
                   </tr>
                 );
               })}
-              {!rows.length && (
+              {!units.length && (
                 <tr>
                   <td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>
                     ไม่พบข้อมูล
