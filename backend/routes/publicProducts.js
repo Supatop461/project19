@@ -126,21 +126,26 @@ router.get('/', async (req, res) => {
     const useView  = await hasTable('v_product_variants_live_stock');
     const hasFinal = useView && await hasColumn('v_product_variants_live_stock', 'final_price');
 
+    // ราคาแบบไดนามิก: ถ้าไม่มี selling_price ให้ลอง price
+    const hasSellingPrice = await hasColumn('products', 'selling_price');
+    const hasPriceCol     = await hasColumn('products', 'price');
+    const basePriceCol    = hasSellingPrice ? 'p.selling_price' : (hasPriceCol ? 'p.price' : 'NULL');
+
     const priceExpr = useView
       ? (hasFinal ? 'MIN(COALESCE(v.price_override, v.final_price))'
                   : 'MIN(v.price_override)')
-      : 'p.selling_price';
+      : basePriceCol;
 
     const stockExpr = useView ? 'COALESCE(SUM(v.stock),0)::int' : '0::int';
 
-    // cover image (fallback ถ้าไม่มี p.image_url)
-    const coverJoin = hasImageUrl ? `
+    // JOIN รูป cover เสมอ (กัน error cv)
+    const coverJoin = `
       LEFT JOIN LATERAL (
         SELECT MIN(pi.url) AS cover_url
         FROM product_images pi
         WHERE pi.product_id = p.product_id
       ) cv ON TRUE
-    ` : ''; // เราจะใช้ cv.cover_url ต่อให้มี image_url เพื่อ fallback
+    `;
 
     // ต้องการ popular/featured?
     const wantFeatured = String(featured).toLowerCase() === '1' || String(featured).toLowerCase() === 'true';
@@ -149,11 +154,12 @@ router.get('/', async (req, res) => {
     const baseSelect = `
       SELECT
         p.product_id, p.product_name, p.description,
-        ${hasImageUrl ? 'COALESCE(NULLIF(p.image_url, \'\'), cv.cover_url) AS image_url' : 'cv.cover_url AS image_url'},
+        ${hasImageUrl ? `COALESCE(NULLIF(p.image_url, ''), cv.cover_url)` : 'cv.cover_url'} AS image_url,
         p.category_id, c.category_name,
         p.subcategory_id, sc.subcategory_name,
         ${priceExpr}::numeric AS min_price,
-        ${stockExpr} AS stock
+        ${stockExpr} AS stock,
+        ${useView ? 'NULL::numeric' : `${basePriceCol}::numeric`} AS selling_price
       FROM products p
       ${useView ? 'LEFT JOIN v_product_variants_live_stock v ON v.product_id = p.product_id' : ''}
       ${coverJoin}
@@ -165,7 +171,8 @@ router.get('/', async (req, res) => {
       GROUP BY
         p.product_id, p.product_name, p.description,
         ${hasImageUrl ? 'p.image_url, cv.cover_url' : 'cv.cover_url'},
-        p.category_id, c.category_name, p.subcategory_id, sc.subcategory_name
+        p.category_id, c.category_name, p.subcategory_id, sc.subcategory_name,
+        ${useView ? '' : basePriceCol}
     `;
 
     let sql, listParams;
@@ -220,10 +227,14 @@ router.get('/best-sellers', async (req, res) => {
     const hasFinal = useView && await hasColumn('v_product_variants_live_stock', 'final_price');
     const { publishedCol, archivedFilter, catPub, subPub, hasImageUrl } = await getSchemaFlags();
 
+    const hasSellingPrice = await hasColumn('products', 'selling_price');
+    const hasPriceCol     = await hasColumn('products', 'price');
+    const basePriceCol    = hasSellingPrice ? 'p.selling_price' : (hasPriceCol ? 'p.price' : 'NULL');
+
     const priceExpr = useView
       ? (hasFinal ? 'MIN(COALESCE(v.price_override, v.final_price))'
                   : 'MIN(v.price_override)')
-      : 'p.selling_price';
+      : basePriceCol;
     const stockExpr = useView ? 'COALESCE(SUM(v.stock),0)::int' : '0::int';
 
     const coverJoin = `
@@ -244,12 +255,13 @@ router.get('/best-sellers', async (req, res) => {
       )
       SELECT
         p.product_id, p.product_name, p.description,
-        ${hasImageUrl ? 'COALESCE(NULLIF(p.image_url, \'\'), cv.cover_url) AS image_url' : 'cv.cover_url AS image_url'},
+        ${hasImageUrl ? `COALESCE(NULLIF(p.image_url, ''), cv.cover_url)` : 'cv.cover_url'} AS image_url,
         p.category_id, c.category_name,
         p.subcategory_id, sc.subcategory_name,
         ${priceExpr}::numeric AS min_price,
         ${stockExpr} AS stock,
-        COALESCE(s.sold_qty, 0) AS sold_qty
+        COALESCE(s.sold_qty, 0) AS sold_qty,
+        ${useView ? 'NULL::numeric' : `${basePriceCol}::numeric`} AS selling_price
       FROM products p
       ${useView ? 'LEFT JOIN v_product_variants_live_stock v ON v.product_id = p.product_id' : ''}
       LEFT JOIN sold s               ON s.product_id = p.product_id
@@ -263,7 +275,8 @@ router.get('/best-sellers', async (req, res) => {
       GROUP BY
         p.product_id, p.product_name, p.description,
         ${hasImageUrl ? 'p.image_url, cv.cover_url' : 'cv.cover_url'},
-        p.category_id, c.category_name, p.subcategory_id, sc.subcategory_name, s.sold_qty
+        p.category_id, c.category_name, p.subcategory_id, sc.subcategory_name, s.sold_qty,
+        ${useView ? '' : basePriceCol}
       ORDER BY COALESCE(s.sold_qty, 0) DESC, p.product_id DESC
       LIMIT $1
     `;
@@ -285,13 +298,18 @@ router.get('/:productId', async (req, res) => {
 
     const { publishedCol, archivedFilter, hasImageUrl } = await getSchemaFlags();
 
+    // เลือกราคาไดนามิก
+    const hasSellingPrice = await hasColumn('products', 'selling_price');
+    const hasPriceCol     = await hasColumn('products', 'price');
+    const basePriceCol    = hasSellingPrice ? 'p.selling_price' : (hasPriceCol ? 'p.price' : 'NULL');
+
     // รายการสินค้า (ต้องเผยแพร่ + ไม่ archived)
     const p = (await db.query(
       `
       SELECT
         p.product_id, p.product_name, p.description,
         ${hasImageUrl ? 'p.image_url' : 'NULL::text AS image_url'},
-        p.category_id, p.subcategory_id, p.selling_price
+        p.category_id, p.subcategory_id, ${basePriceCol} AS selling_price
       FROM products p
       WHERE p.product_id = $1
         AND (${publishedCol} = TRUE)

@@ -88,7 +88,10 @@ app.get('/_health', (_req, res) => res.json({ ok: true, at: 'server.js', ts: Dat
 /* ───────────── static uploads ───────────── */
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-app.use('/uploads', express.static(uploadsDir, { maxAge: '1h' }));
+
+// 🔹 เสิร์ฟทั้งสองเส้นทาง: /uploads และ /api/uploads (สำคัญสำหรับ <img> ที่ได้ชื่อไฟล์ล้วน ๆ)
+app.use('/uploads',     express.static(uploadsDir, { maxAge: '1h' }));
+app.use('/api/uploads', express.static(uploadsDir, { maxAge: '1h' }));
 
 /* ───────────── rate limit (login) ───────────── */
 app.use('/api/auth/login', rateLimit({
@@ -107,7 +110,7 @@ const categoryRoutes       = tryRequire('./routes/categories');
 const orderRoutes          = tryRequire('./routes/orders');
 const authRoutes           = tryRequire('./routes/auth');
 const addressesRoutes      = tryRequire('./routes/addresses');
-const variantRoutes        = tryRequire('./routes/variants');
+const variantRoutes        = tryRequire('./routes/variants');           // ✅ ใช้ร่วมทั้ง public และ nested
 const publicProductsRoutes = tryRequire('./routes/publicProducts');
 const inventoryRoutes      = tryRequire('./routes/inventory');
 const productImagesRoutes  = tryRequire('./routes/productImages');
@@ -134,7 +137,7 @@ mount('publicUnits',     '/api', publicUnitsRouter);   // มี GET /api/units
 mount('lookups',         '/api', lookupsRouter);
 
 /* ───────────── admin/protected mounts ───────────── */
-mount('adminUnits',      '/api', adminUnitsRouter);    // ควรรองรับทั้ง /api/units และ /api/admin/units ภายในไฟล์นี้
+mount('adminUnits',      '/api', adminUnitsRouter);    // รองรับทั้ง /api/units และ /api/admin/units ภายในไฟล์นี้
 mount('sizeUnits',       '/api/size-units', sizeUnitsRouter);
 mount('adminSizeUnits',  ['/api/admin/size-units','/api/admin/sizes'], adminSizeUnitsRouter, requireAuth, requireRole(['admin']));
 mount('adminProducts',   ['/api/admin/products','/admin/products'], adminProductRoutes, requireAuth, requireRole(['admin']));
@@ -156,7 +159,11 @@ if (productImagesRoutes) {
 }
 
 /* ───────────── protected mounts ───────────── */
-mount('variants',   '/api/variants', variantRoutes, requireAuth);
+mount('variants',        '/api/variants', variantRoutes); // เดิม (ถ้ามีการใช้ public/alias)
+// ⬇⬇⬇ เพิ่ม mount แบบ "nested under product" ให้ endpoint อย่าง
+// POST /api/admin/products/:productId/variants/generate ทำงานได้
+mount('variants-nested', '/api/admin/products', variantRoutes, requireAuth, requireRole(['admin']));
+
 mount('uploads',    ['/api/uploads','/api/upload','/upload'], uploadsRoutes, requireAuth);
 mount('addresses',  ['/api/addresses','/addresses'], addressesRoutes, requireAuth);
 mount('user-addresses', ['/api/user-addresses','/user-addresses'], addressesRoutes, requireAuth);
@@ -211,6 +218,6 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on http://localhost:${PORT}`);
-  console.log(`📁 Static uploads at /uploads -> ${uploadsDir}`);
+  console.log(`📁 Static uploads at /uploads and /api/uploads -> ${uploadsDir}`);
   console.log(`🔓 CORS allowlist: ${allowlist.join(', ')}`);
 });

@@ -51,8 +51,7 @@ function fileListToResponse(files) {
 // health check
 router.get('/__ping', (_req, res) => res.json({ ok: true, where: 'uploads' }));
 
-// อัปโหลดหลายไฟล์: POST /api/uploads
-// รับได้ทุกชื่อฟิลด์ (file/files/image/photo/...)
+// อัปโหลดหลายไฟล์: POST /api/uploads  | และรองรับ /upload เนื่องจากถูก mount ไว้หลาย base
 router.post('/', (req, res) => {
   upload.any()(req, res, (err) => {
     if (err) {
@@ -61,7 +60,18 @@ router.post('/', (req, res) => {
     }
     const files = fileListToResponse(req.files);
     if (!files.length) return res.status(400).json({ error: 'No file uploaded' });
-    return res.json({ files });
+
+    // หากอัปโหลด 1 ไฟล์ ให้ตอบซ้ำชั้นบนด้วย เพื่อความสะดวกของ frontend
+    if (files.length === 1) {
+      const one = files[0];
+      return res.json({
+        ok: true,
+        url: one.url,              // << ใช้ตัวนี้ใน frontend ได้เลย
+        file: one,
+        files,
+      });
+    }
+    return res.json({ ok: true, files });
   });
 });
 
@@ -73,7 +83,7 @@ router.post('/avatar', (req, res) => {
       return res.status(status).json({ error: err.message || 'Upload error' });
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    return res.json({ url: `/uploads/${req.file.filename}` });
+    return res.json({ ok: true, url: `/uploads/${req.file.filename}` });
   });
 });
 
@@ -85,7 +95,7 @@ router.post('/category-image', (req, res) => {
       return res.status(status).json({ error: err.message || 'Upload error' });
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    return res.json({ url: `/uploads/${req.file.filename}` });
+    return res.json({ ok: true, url: `/uploads/${req.file.filename}` });
   });
 });
 
@@ -97,7 +107,7 @@ router.post('/subcategory-image', (req, res) => {
       return res.status(status).json({ error: err.message || 'Upload error' });
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    return res.json({ url: `/uploads/${req.file.filename}` });
+    return res.json({ ok: true, url: `/uploads/${req.file.filename}` });
   });
 });
 

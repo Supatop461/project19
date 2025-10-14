@@ -85,3 +85,7 @@
   background: var(--brand-600, #5aa557);
   line-height: 1.4;
 }
+.badge-new{
+  background:#ef4444; color:#fff; font-weight:700;
+  font-size:12px; padding:2px 8px; border-radius:999px;
+}

@@ -1,9 +1,9 @@
 // src/lib/api.js
 // รวมศูนย์การเรียก API ฝั่ง frontend ให้สะอาด/ปลอดภัย/ยืดหยุ่น
-// - คงฟังก์ชันเดิมทั้งหมดของคุณ + เพิ่ม Units/Size-Units CRUD
-// - มี interceptors แนบ Authorization ทั้ง instance และ global
+// - ✅ มี mediaSrc() สำหรับแปลง path รูปภาพ (เชื่อมกับ backend /uploads/...)
+// - ✅ มี interceptors แนบ Authorization ทั้ง instance และ global
 // - ✅ มี searchItems()/ensureVariant() สำหรับ Inventory Picker
-// - คง searchVariants() เป็น alias ชี้ไป searchItems() เพื่อ compatibility
+// - ✅ ครบ Units/Size-Units CRUD, Dashboard, Orders, Addresses
 
 import axios from 'axios';
 
@@ -16,6 +16,16 @@ export const BASE_URL =
 
 // alias เพื่อความเข้ากันได้กับโค้ดเดิมบางส่วน (ถ้ามี)
 export const API_BASE = BASE_URL;
+
+/* ---------- API_ORIGIN (สำหรับรูปภาพ /uploads) ---------- */
+export const API_ORIGIN = (() => {
+  try {
+    const u = new URL(BASE_URL, typeof window !== 'undefined' ? window.location.href : 'http://localhost');
+    return u.origin;
+  } catch {
+    return 'http://localhost:3001';
+  }
+})();
 
 /* ---------- Path helper ---------- */
 export const path = (p) => {
@@ -33,11 +43,30 @@ export const path = (p) => {
     : (s.startsWith('/api/') ? s : '/api' + s);
 };
 
+/* ---------- Image URL helper ---------- */
+export function mediaSrc(src) {
+  if (!src) return '';
+  const s = String(src);
+
+  // ไม่แตะ blob:/data:/http(s)://
+  if (s.startsWith('blob:') || s.startsWith('data:') || /^https?:\/\//i.test(s)) return s;
+
+  // /uploads/... → เติม origin
+  if (s.startsWith('/uploads/')) return `${API_ORIGIN}${s}`;
+
+  // uploads/... → เติม / และ origin
+  const clean = s.replace(/^\/+/, '');
+  if (clean.startsWith('uploads/')) return `${API_ORIGIN}/${clean}`;
+
+  // เผื่อส่งมาเป็นแค่ชื่อไฟล์
+  return `${API_ORIGIN}/uploads/${clean}`;
+}
+
 /* ---------- Axios instance ---------- */
 export const api = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
-  validateStatus: (s) => s >= 200 && s < 400, // 4xx/5xx ไปที่ response interceptor
+  validateStatus: (s) => s >= 200 && s < 400,
   headers: { Accept: 'application/json' },
 });
 
@@ -64,7 +93,6 @@ api.interceptors.response.use(
   async (err) => {
     const s = err?.response?.status;
     const cfg = err?.config;
-
     if (s === 404) console.warn('[API 404]', cfg?.method?.toUpperCase(), cfg?.url, err.response?.data);
     if (s === 401) { try { localStorage.removeItem('token'); } catch {} }
 
@@ -77,7 +105,7 @@ api.interceptors.response.use(
   }
 );
 
-/* ---------- Global axios defaults (กันเคสเรียก axios ตรง ๆ) ---------- */
+/* ---------- Global axios defaults ---------- */
 axios.defaults.baseURL = BASE_URL;
 axios.interceptors.request.use((cfg) => {
   try {
@@ -100,7 +128,7 @@ const unwrap = (p) => p.then((r) => r.data);
 
 export const toArray = (x) => {
   if (Array.isArray(x)) return x;
-  if (x && Array.isArray(x.data)) return x.data; // { data: [...] }
+  if (x && Array.isArray(x.data)) return x.data;
   return [];
 };
 
@@ -143,6 +171,8 @@ export const getCategories = (status = 'active') =>
 /* ====================================================================== */
 export const listAdminProducts = (params = {}) =>
   GET('/admin/products', params);
+export const createProductFull = (payload) =>
+  POST('/admin/products/full', payload);
 
 /* ====================================================================== */
 /*                          Variants (admin)                              */
@@ -171,7 +201,7 @@ export const deleteValue = (value_id) =>
   DEL(`/admin/values/${value_id}`);
 
 /* ====================================================================== */
-/*                           Inventory (เก่า)                             */
+/*                          Inventory & Picker                            */
 /* ====================================================================== */
 export const listInventory = (params = {}) =>
   GET('/inventory', params);
@@ -186,53 +216,28 @@ export const adjustInventory = (productId, variant_id, delta, note) =>
 export const setInventory = (productId, variant_id, stock, note) =>
   PUT(`/inventory/${productId}`, { variant_id, stock, note });
 
-/* ====================================================================== */
-/*                ✅ Inventory (ใหม่): searchItems + ensureVariant        */
-/* ====================================================================== */
-/**
- * ค้นหา “ทุกแหล่งสินค้า”:
- * - variants (ที่มี SKU อยู่แล้ว)
- * - products ที่ยังไม่มี variant เลย (โหมด OUT จะไม่คืนอันนี้)
- * Response:
- *  - { kind:'variant', product_id, product_name, variant_id, sku, stock_qty }
- *  - { kind:'product', product_id, product_name, stock_qty:0 }
- */
 export async function searchItems(q, { mode = 'in', limit = 20 } = {}) {
   if (!q || !q.trim()) return [];
-  const params = new URLSearchParams({
-    q: q.trim(),
-    mode,
-    limit: String(limit),
-  });
+  const params = new URLSearchParams({ q: q.trim(), mode, limit: String(limit) });
   const url = path(`/inventory/search/items?${params.toString()}`);
   const data = await unwrap(api.get(url));
   const arr = toArray(data || data?.data || []);
   return mode === 'out' ? arr.filter((x) => Number(x.stock_qty || 0) > 0) : arr;
 }
 
-/**
- * สร้าง/ยืนยันว่า product_id นี้ “มี SKU แน่ๆ”
- * - ถ้ามีอยู่แล้ว: คืนตัวแรกที่ active
- * - ถ้ายังไม่มี: จะสร้าง SKU ใหม่ แล้วคืนข้อมูล variant
- */
 export async function ensureVariant(product_id) {
   return POST('/inventory/variants/ensure', { product_id });
 }
 
-/* (คงไว้เพื่อ compatibility) VariantPicker เดิมเรียกอันนี้ */
 export async function searchVariants(q, { mode = 'in', limit = 20 } = {}) {
   return searchItems(q, { mode, limit });
 }
 
 /* ====================================================================== */
-/*                       Units & Size-Units (อัปเดตใหม่)                  */
+/*                          Units & Size-Units                            */
 /* ====================================================================== */
-/** Units (public list) */
 export const listUnits = (params = {}) => GET_A('/units', params);
-/** Units (public options) */
 export const unitOptionsPublic = () => GET_A('/units/options');
-
-/** Units (admin) — ใช้ :id ตาม backend ล่าสุด */
 export const listUnitsAdmin = (params = {}) => GET('/admin/units', params);
 export const unitOptionsAdmin = () => GET_A('/admin/units/options');
 export const createUnit = (payload) => POST('/admin/units', payload);
@@ -241,10 +246,7 @@ export const deleteUnit = (id) => DEL(`/admin/units/${encodeURIComponent(id)}`);
 export const publishUnit = (id) => PATCH(`/admin/units/${encodeURIComponent(id)}/publish`);
 export const unpublishUnit = (id) => PATCH(`/admin/units/${encodeURIComponent(id)}/unpublish`);
 
-/** Size-Units (list public) */
 export const listSizeUnits = (params = {}) => GET_A('/size-units', params);
-
-/** Size-Units (admin) — ฝั่งนี้อิง code ตาม router ของคุณ */
 export const updateSizeUnit = (code, payload) =>
   PUT(`/admin/size-units/${encodeURIComponent(code)}`, payload);
 export const createSizeUnit = (payload) =>
@@ -257,7 +259,7 @@ export const unpublishSizeUnit = (code) =>
   PATCH(`/admin/size-units/${encodeURIComponent(code)}/publish`, { published: false });
 
 /* ====================================================================== */
-/*                    Orders / Dashboard (เดิม)                           */
+/*                              Dashboard                                 */
 /* ====================================================================== */
 export async function getNewOrdersCount({ updatedSince } = {}) {
   const url = new URL(path('/orders/new-count'), window.location.origin);
@@ -266,25 +268,18 @@ export async function getNewOrdersCount({ updatedSince } = {}) {
   return data?.count ?? 0;
 }
 
-/* ---------- Dashboard APIs ---------- */
-export const dashSummary = (params = {}) =>
-  GET_O('/dashboard/summary', params);
-export const dashSalesByMonth = (params = {}) =>
-  GET_A('/dashboard/sales-by-month', params);
-export const dashOrdersByStatus = (params = {}) =>
-  GET_A('/dashboard/orders-by-status', params);
-export const dashCustomersByProvince = (params = {}) =>
-  GET_A('/dashboard/customers-by-province', params);
-export const dashTopCategories = (params = {}) =>
-  GET_A('/dashboard/top-categories-by-purchased', params);
-export const dashProductCountByCategory = (params = {}) =>
-  GET_A('/dashboard/product-count-by-category', params);
+export const dashSummary = (params = {}) => GET_O('/dashboard/summary', params);
+export const dashSalesByMonth = (params = {}) => GET_A('/dashboard/sales-by-month', params);
+export const dashOrdersByStatus = (params = {}) => GET_A('/dashboard/orders-by-status', params);
+export const dashCustomersByProvince = (params = {}) => GET_A('/dashboard/customers-by-province', params);
+export const dashTopCategories = (params = {}) => GET_A('/dashboard/top-categories-by-purchased', params);
+export const dashProductCountByCategory = (params = {}) => GET_A('/dashboard/product-count-by-category', params);
 export const dashRecentOrders = () => GET_A('/dashboard/recent-orders');
 export const dashRecentProducts = () => GET_A('/dashboard/recent-products');
 export const dashRecentAddresses = () => GET_A('/dashboard/recent-addresses');
 
 /* ====================================================================== */
-/*                 (ออปชัน) Address helpers ฝั่งลูกค้า                  */
+/*                           Addresses (ลูกค้า)                           */
 /* ====================================================================== */
 export const listMyAddresses = () => GET_A('/addresses/me');
 export const listAddresses = () => GET_A('/addresses');

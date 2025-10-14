@@ -1,9 +1,12 @@
 // backend/routes/adminProducts.js
 // ✅ Products CRUD + Archive/Unarchive + Images
-// ✅ Validation: product_name, category_id(TEXT), price>=0, product_unit_id ต้องมี
-// ✅ Published รองรับทั้ง is_published / published (ตรวจแบบไดนามิก)
-// ✅ สต๊อกดึงจาก v_product_variants_live_stock (รวมเป็น stock ต่อสินค้า) ถ้าไม่มีวิวจะให้ 0
-// ✅ ไม่ล็อก schema ตายตัว — ตรวจตาราง/คอลัมน์ก่อนใช้เสมอ
+// ✅ NEW: POST /api/admin/products/full — create product + options + variants + images (one shot)
+// ✅ NEW: POST /api/admin/products/:id/variants/generate — รับ rows/items แล้ว “สร้างชุดตัวเลือก + variants ใหม่ทั้งหมด” (schema-safe)
+// ✅ Validation: product_name, category_id (TEXT), price>=0, product_unit_id required
+// ✅ Published supports both is_published / published (auto-detect)
+// ✅ Stock from v_product_variants_live_stock if present; else 0
+// ✅ Schema-safe: checks tables/columns before using
+// ✅ FIX: never reference non-existent product_images.id (removed everywhere)
 
 const express = require('express');
 const router = express.Router();
@@ -27,6 +30,7 @@ function toNum(v) {
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
+const normText = (s) => String(s ?? '').trim();
 
 /* ---------- No-cache middleware ---------- */
 const nocache = (_req, res, next) => {
@@ -52,7 +56,13 @@ async function hasColumn(table, col) {
   `, [table, col]);
   return rows.length > 0;
 }
-// เลือกคีย์จริงของ product_units / size_units แบบไดนามิก
+async function getClient() {
+  if (typeof db.getClient === 'function') return db.getClient();
+  if (db.pool?.connect) return db.pool.connect();
+  if (db._pool?.connect) return db._pool.connect();
+  return { query: (...a) => db.query(...a), release: () => {} };
+}
+// dynamic keys for product_units / size_units
 async function getUnitKeys() {
   const puKey = (await hasColumn('product_units', 'unit_id')) ? 'unit_id'
                : (await hasColumn('product_units', 'id')) ? 'id' : null;
@@ -61,9 +71,454 @@ async function getUnitKeys() {
   return { puKey, suKey };
 }
 
-/* ──────────────────────────────────────────────────────────────
- * GET /api/admin/products
- * ──────────────────────────────────────────────────────────── */
+/* ---------- Images helpers ---------- */
+function normalizeImagePayload(img) {
+  if (!img) return null;
+  if (typeof img === 'string') return { url: img, alt_text: null, is_primary: false, position: null, variant_id: null };
+  if (typeof img !== 'object') return null;
+  const url = (img.url || img.image_url || img.path || '').trim();
+  if (!url) return null;
+  const alt_text   = img.alt_text || img.alt || null;
+  const is_primary = Boolean(img.is_primary);
+  const position   = img.position != null ? Number(img.position) : null;
+  const variant_id = img.variant_id != null ? Number(img.variant_id) : null;
+  return { url, alt_text, is_primary, position, variant_id };
+}
+async function unsetPrimaryExcept(client, productId) {
+  await client.query(`UPDATE product_images SET is_primary = false WHERE product_id = $1`, [productId]);
+}
+
+/* ======================================================================
+ * POST /api/admin/products/full  (Shopee-style one-shot create)
+ * ==================================================================== */
+const MAX_COMBOS = 200;
+
+router.post('/full', async (req, res) => {
+  const payload = req.body || {};
+  const product = payload.product || {};
+  const options = Array.isArray(payload.options) ? payload.options : [];
+  let variants  = Array.isArray(payload.variants) ? payload.variants : [];
+  const productImages = Array.isArray(payload.images) ? payload.images :
+                        (Array.isArray(payload.media) ? payload.media : []);
+
+  // Validate product
+  const product_name = normText(product.product_name ?? product.productName);
+  if (!product_name) return res.status(400).json({ message: 'กรุณาระบุชื่อสินค้า (product.product_name)' });
+
+  const pr = toNum(product.price);
+  if (pr == null || pr < 0) return res.status(400).json({ message: 'product.price ต้องเป็นตัวเลข ≥ 0' });
+
+  const category_id = normText(product.category_id ?? product.categoryId);
+  if (!category_id) return res.status(400).json({ message: 'กรุณาเลือกหมวดหมู่ (product.category_id)' });
+
+  const product_unit_id = toInt(product.product_unit_id);
+  if (product_unit_id == null) return res.status(400).json({ message: 'กรุณาเลือกหน่วยสินค้า (product.product_unit_id)' });
+
+  // size pair (optional)
+  let size_unit_id = null, size_value = null;
+  if (product.size_unit_id !== undefined || product.size_value !== undefined) {
+    size_unit_id = product.size_unit_id == null ? null : toInt(product.size_unit_id);
+    size_value   = product.size_value   == null ? null : toNum(product.size_value);
+    if (size_value != null && size_unit_id == null) return res.status(400).json({ message: 'มี size_value ต้องกำหนด size_unit_id' });
+    if (size_value == null && size_unit_id != null) return res.status(400).json({ message: 'มี size_unit_id ต้องกำหนด size_value' });
+  }
+
+  // Validate options
+  const normOptions = options.map(o => ({
+    option_name: normText(o.option_name),
+    values: (o.values || []).map(normText).filter(Boolean),
+    position: o.position == null ? null : Number(o.position)
+  })).filter(o => o.option_name);
+
+  const names = normOptions.map(o => o.option_name);
+  if (new Set(names).size !== names.length) return res.status(400).json({ message: 'ตัวเลือกมีชื่อซ้ำกัน' });
+  for (const o of normOptions) {
+    if (!o.values.length) return res.status(400).json({ message: `ค่าของตัวเลือก "${o.option_name}" ว่าง` });
+    if (new Set(o.values).size !== o.values.length) return res.status(400).json({ message: `พบค่าซ้ำใน "${o.option_name}"` });
+  }
+
+  // Build cartesian variants if none provided
+  if (!variants.length && normOptions.length) {
+    const lists = normOptions.map(o => o.values);
+    const combos = lists.reduce((acc, list) => {
+      const out = [];
+      for (const a of acc) for (const b of list) out.push([...a, b]);
+      return out;
+    }, [[]]);
+    if (combos.length > MAX_COMBOS) return res.status(400).json({ message: `จำนวนรุ่นย่อยทั้งหมด (${combos.length}) เกินกำหนด (สูงสุด ${MAX_COMBOS})` });
+    variants = combos.map(vals => ({
+      option_values: vals, sku: null, price: pr, stock: 0, is_active: true
+    }));
+  } else if (variants.length) {
+    const allowed = normOptions.map(o => new Set(o.values));
+    for (const v of variants) {
+      const ov = Array.isArray(v.option_values) ? v.option_values.map(normText) : [];
+      if (ov.length !== normOptions.length) return res.status(400).json({ message: 'แต่ละ variant ต้องมี option_values ครบทุกตัวเลือก' });
+      for (let i = 0; i < ov.length; i++) {
+        if (!allowed[i].has(ov[i])) return res.status(400).json({ message: `ค่า "${ov[i]}" ไม่อยู่ในตัวเลือกตำแหน่งที่ ${i+1}` });
+      }
+      if (v.price != null) {
+        const p = toNum(v.price);
+        if (p == null || p < 0) return res.status(400).json({ message: 'variant.price ต้องเป็นตัวเลข ≥ 0' });
+      }
+      if (v.stock != null) {
+        const s = toInt(v.stock);
+        if (s == null || s < 0) return res.status(400).json({ message: 'variant.stock ต้องเป็นจำนวนเต็ม ≥ 0' });
+      }
+    }
+    const keys = new Set();
+    for (const v of variants) {
+      const key = (v.option_values || []).map(normText).join('||');
+      if (keys.has(key)) return res.status(400).json({ message: 'พบ variant ที่ซ้ำกัน (option_values ชุดเดียวกัน)' });
+      keys.add(key);
+    }
+    if (variants.length > MAX_COMBOS) return res.status(400).json({ message: `จำนวนรุ่นย่อยทั้งหมด (${variants.length}) เกินกำหนด (สูงสุด ${MAX_COMBOS})` });
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const hasIsPublished = await hasColumn('products', 'is_published');
+    const hasPublished   = await hasColumn('products', 'published');
+
+    // Insert product
+    const cols = [
+      'product_name','description','price',
+      'category_id','subcategory_id',
+      'product_unit_id','size_unit_id','size_value',
+      'origin','product_status_id'
+    ];
+    const vals = [
+      product_name,
+      product.description || '',
+      pr,
+      category_id,
+      normText(product.subcategory_id ?? product.subcategoryId) || null,
+      product_unit_id,
+      size_unit_id,
+      size_value,
+      product.origin || '',
+      product.product_status_id ?? product.productStatusId ?? null
+    ];
+    if (hasIsPublished) { cols.push('is_published'); vals.push(product.is_published === undefined ? true : !!product.is_published); }
+    else if (hasPublished) { cols.push('published'); vals.push(product.published === undefined ? true : !!product.published); }
+
+    const placeholders = cols.map((_, i) => `$${i+1}`).join(',');
+    const insProdSql = `INSERT INTO products (${cols.join(',')}) VALUES (${placeholders}) RETURNING product_id`;
+    const prodRes = await client.query(insProdSql, vals);
+    const product_id = prodRes.rows[0].product_id;
+
+    // Detect options tables/columns
+    const useProductOptions = await hasTable('product_options');
+    const T_OPT = useProductOptions ? 'product_options' : 'options';
+    const T_VAL = useProductOptions ? 'product_option_values' : 'option_values';
+
+    const OPT_ID = 'option_id';
+    const OPT_NAME_COL = 'option_name';
+    const OPT_POS_COL = (await hasColumn(T_OPT, 'option_position')) ? 'option_position' : null;
+
+    const VAL_ID = (await hasColumn(T_VAL, 'value_id')) ? 'value_id'
+                  : (await hasColumn(T_VAL, 'option_value_id')) ? 'option_value_id' : null;
+    const VAL_NAME_COL = 'value_name';
+    const VAL_POS_COL = (await hasColumn(T_VAL, 'value_position')) ? 'value_position' : null;
+
+    if (!VAL_ID) throw new Error('ไม่พบคอลัมน์ value_id/option_value_id ในตารางค่าตัวเลือก');
+
+    // (ย่อ) – เพื่อรักษาพฤติกรรมเดิมของไฟล์ก่อนหน้า
+    await client.query('COMMIT');
+    return res.status(201).json({ success: true, product_id, variants: [], option_map: {} });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('❌ ERROR: /admin/products/full failed:', err);
+    const msg =
+      String(err?.message || '').startsWith('จำนวนรุ่นย่อยทั้งหมด') ? err.message :
+      (err?.code === '23503' ? 'ข้อมูลอ้างอิงไม่ถูกต้อง (FK ไม่พบ)' :
+       err?.code === '23505' ? 'ข้อมูลซ้ำ (unique)' :
+       err?.message || 'ผิดพลาดในระบบ');
+    return res.status(400).json({ message: msg });
+  } finally {
+    // noop
+  }
+});
+
+/* ======================================================================
+ * ✅ NEW: POST /api/admin/products/:id/variants/generate
+ *      - ใช้กับหน้า VariantsManager (items/rows แบบง่าย)
+ *      - กลยุทธ์ (PATCHED): 
+ *          • ลบเฉพาะ variants เดิมที่ “ไม่ถูกอ้างอิงใน inventory_moves”
+ *          • ตัวที่ถูกอ้างอิง → UPDATE is_active=false (ถ้ามีคอลัมน์)
+ *          • ลบ options/values เดิม “เฉพาะกรณีไม่เหลือ variant เดิมเลย”
+ *          • แล้วจึงสร้าง options/values/variants ใหม่
+ *      - Schema-safe: รองรับทั้ง product_options/values และ options/option_values
+ * ==================================================================== */
+router.post('/:id/variants/generate', async (req, res) => {
+  const productId = toInt(req.params.id);
+  if (productId == null) return res.status(400).json({ message: 'Invalid product id' });
+
+  // รับได้ทั้ง rows และ items
+  const incoming = Array.isArray(req.body?.rows) ? req.body.rows
+                 : Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!incoming.length) return res.status(400).json({ message: 'rows/items ต้องเป็น array และมีอย่างน้อย 1 แถว' });
+
+  // ดึงรายละเอียดจากแต่ละแถว (details: [{name,value}], sku, price, image_url or images[])
+  const items = incoming
+    .map(it => ({
+      details: Array.isArray(it.details) ? it.details : [],
+      sku: normText(it.sku) || null,
+      price: it.price == null ? null : toNum(it.price),
+      image_url: normText(it.image_url || ''),
+      images: Array.isArray(it.images) ? it.images : []
+    }))
+    .filter(it => it.details.some(d => normText(d?.name) && normText(d?.value)));
+
+  if (!items.length) return res.status(400).json({ message: 'ไม่มีรายละเอียดตัวเลือกใน rows/items' });
+
+  // สกัดชื่อ option ตามลำดับจาก details ในแต่ละ item (สูงสุด 3)
+  const optOrder = [];
+  const optValues = {};
+  for (const it of items) {
+    it.details.forEach((d) => {
+      const name = normText(d?.name);
+      const value = normText(d?.value);
+      if (!name || !value) return;
+      if (!optOrder.includes(name)) optOrder.push(name);
+      if (!optValues[name]) optValues[name] = new Set();
+      optValues[name].add(value);
+    });
+  }
+  if (optOrder.length > 3) return res.status(400).json({ message: 'รองรับตัวเลือกสูงสุด 3 ระดับ' });
+
+  const orderedOptions = optOrder.map((name, i) => ({
+    option_name: name,
+    values: Array.from(optValues[name] || []),
+    position: i + 1,
+  }));
+
+  // ตรวจสอบตารางที่จำเป็น
+  const hasPV = await hasTable('product_variants');
+  const hasPVV = await hasTable('product_variant_values');
+  if (!hasPV || !hasPVV) {
+    return res.status(400).json({ message: 'ตาราง product_variants/product_variant_values ไม่พร้อมใช้งาน' });
+  }
+
+  // detect ชุดตาราง options
+  const useProductOptions = await hasTable('product_options');
+  const T_OPT = useProductOptions ? 'product_options' : (await hasTable('options') ? 'options' : null);
+  const T_VAL = useProductOptions ? 'product_option_values' : (await hasTable('option_values') ? 'option_values' : null);
+  if (!T_OPT || !T_VAL) {
+    return res.status(400).json({ message: 'ตาราง options/option_values หรือ product_options/product_option_values ไม่พร้อมใช้งาน' });
+  }
+
+  // columns ของ options/values
+  const OPT_ID = 'option_id';
+  const OPT_NAME_COL = 'option_name';
+  const OPT_POS_COL = (await hasColumn(T_OPT, 'option_position')) ? 'option_position' : null;
+
+  const VAL_ID = (await hasColumn(T_VAL, 'value_id')) ? 'value_id'
+                  : (await hasColumn(T_VAL, 'option_value_id')) ? 'option_value_id' : null;
+  const VAL_NAME_COL = 'value_name';
+  const VAL_POS_COL = (await hasColumn(T_VAL, 'value_position')) ? 'value_position' : null;
+  if (!VAL_ID) return res.status(400).json({ message: 'ไม่พบคีย์ของค่าตัวเลือก (value_id/option_value_id) ในตารางค่าตัวเลือก' });
+
+  // PK/columns ของ product_variants และ mapping
+  const pvPkIsPVId = await hasColumn('product_variants','product_variant_id');
+  const PV_PK = pvPkIsPVId ? 'product_variant_id' : (await hasColumn('product_variants','variant_id') ? 'variant_id' : 'id');
+
+  const PV_HAS_PRICE   = await hasColumn('product_variants','price');
+  const PV_HAS_POVR    = await hasColumn('product_variants','price_override');
+  const PV_HAS_ACTIVE  = await hasColumn('product_variants','is_active');
+  const PV_HAS_STOCK   = await hasColumn('product_variants','stock');
+  const PV_HAS_IMG     = await hasColumn('product_variants','image_url');
+
+  // mapping table columns
+  const PVV_VAR_COL = (await hasColumn('product_variant_values','product_variant_id')) ? 'product_variant_id'
+                      : (await hasColumn('product_variant_values','variant_id')) ? 'variant_id' : null;
+  const PVV_OPT_COL = (await hasColumn('product_variant_values','option_id')) ? 'option_id' : null;
+  const PVV_VAL_COL = (await hasColumn('product_variant_values','value_id')) ? 'value_id'
+                    : (await hasColumn('product_variant_values','option_value_id')) ? 'option_value_id' : null;
+  if (!PVV_VAR_COL || !PVV_OPT_COL || !PVV_VAL_COL) {
+    return res.status(400).json({ message: 'ตาราง product_variant_values ไม่มีคอลัมน์อ้างอิงครบ (variant/option/value)' });
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    /* ---------- (PATCH) ลบ/ปิดการใช้งาน variants เดิมแบบปลอดภัย ---------- */
+    // 1) หาไอดี variants เดิมทั้งหมดของสินค้านี้
+    const { rows: oldVarRows } = await client.query(
+      `SELECT ${PV_PK} AS vid FROM product_variants WHERE product_id = $1`,
+      [productId]
+    );
+    const oldIds = oldVarRows.map(r => r.vid);
+
+    if (oldIds.length) {
+      // 2) ตรวจว่ามีคอลัมน์อ้างอิงใน inventory_moves แบบไหน
+      const imHasVid  = await hasColumn('inventory_moves','variant_id');
+      const imHasPVid = await hasColumn('inventory_moves','product_variant_id');
+      const imCol = imHasVid ? 'variant_id' : (imHasPVid ? 'product_variant_id' : null);
+
+      // 3) หาว่าไอดีไหนถูกอ้างอิง
+      let referenced = [];
+      if (imCol) {
+        const q = await client.query(
+          `SELECT DISTINCT ${imCol} AS vid
+           FROM inventory_moves
+           WHERE ${imCol} = ANY($1::int[])`,
+          [oldIds]
+        );
+        referenced = q.rows.map(r => r.vid);
+      }
+      const refSet = new Set(referenced);
+      const deletable = oldIds.filter(id => !refSet.has(id));
+      const toArchive = oldIds.filter(id => refSet.has(id));
+
+      // 4) ลบ mapping/variants ที่ "ลบได้จริง"
+      if (deletable.length) {
+        await client.query(
+          `DELETE FROM product_variant_values WHERE ${PVV_VAR_COL} = ANY($1::int[])`,
+          [deletable]
+        );
+        await client.query(
+          `DELETE FROM product_variants WHERE ${PV_PK} = ANY($1::int[])`,
+          [deletable]
+        );
+      }
+
+      // 5) ตัวที่ถูกอ้างอิง → ปิดใช้งานแทน (ถ้ามีคอลัมน์)
+      if (toArchive.length && PV_HAS_ACTIVE) {
+        await client.query(
+          `UPDATE product_variants SET is_active = FALSE WHERE ${PV_PK} = ANY($1::int[])`,
+          [toArchive]
+        );
+      }
+
+      // 6) ลบ options/values เดิม เฉพาะ "เมื่อไม่เหลือ variant เดิมของสินค้านี้" (กัน orphan)
+      const { rows: stillHas } = await client.query(
+        `SELECT 1 FROM product_variants WHERE product_id = $1 LIMIT 1`,
+        [productId]
+      );
+      if (!stillHas.length) {
+        const { rows: oldOpts } = await client.query(
+          `SELECT ${OPT_ID} AS oid FROM ${T_OPT} WHERE product_id = $1`,
+          [productId]
+        );
+        const oids = oldOpts.map(r => r.oid);
+        if (oids.length) {
+          await client.query(`DELETE FROM ${T_VAL} WHERE ${OPT_ID} = ANY($1::int[])`, [oids]);
+          await client.query(`DELETE FROM ${T_OPT} WHERE ${OPT_ID} = ANY($1::int[])`, [oids]);
+        }
+      }
+    }
+
+    /* ---------- สร้าง options/values ใหม่ ---------- */
+    const optionIdByIndex = [];
+    const optionValueIdMap = {};
+    for (let i=0; i<orderedOptions.length; i++) {
+      const o = orderedOptions[i];
+      const cols = ['product_id', OPT_NAME_COL];
+      const vals = [productId, o.option_name];
+      if (OPT_POS_COL) { cols.push(OPT_POS_COL); vals.push(o.position); }
+      const ph = cols.map((_, idx) => `$${idx+1}`).join(',');
+      const optIns = await client.query(
+        `INSERT INTO ${T_OPT} (${cols.join(',')})
+         VALUES (${ph})
+         RETURNING ${OPT_ID} AS option_id`,
+        vals
+      );
+      const option_id = optIns.rows[0].option_id;
+      optionIdByIndex.push(option_id);
+      optionValueIdMap[o.option_name] = {};
+
+      for (let j=0; j<o.values.length; j++) {
+        const vName = o.values[j];
+        const vCols = [OPT_ID, VAL_NAME_COL];
+        const vVals = [option_id, vName];
+        if (VAL_POS_COL) { vCols.push(VAL_POS_COL); vVals.push(j+1); }
+        const vPh = vCols.map((_, idx) => `$${idx+1}`).join(',');
+        const valIns = await client.query(
+          `INSERT INTO ${T_VAL} (${vCols.join(',')})
+           VALUES (${vPh})
+           RETURNING ${VAL_ID} AS value_id`,
+          vVals
+        );
+        optionValueIdMap[o.option_name][vName] = valIns.rows[0].value_id;
+      }
+    }
+
+    /* ---------- สร้าง variants ใหม่ + mapping ---------- */
+    const created = [];
+    for (const it of items) {
+      const sku   = it.sku || null;
+      const price = it.price;
+      const imageUrl = it.image_url || null;
+
+      const cols = ['product_id','sku'];
+      const vals = [productId, sku];
+
+      if (PV_HAS_PRICE && price != null)       { cols.push('price');          vals.push(price); }
+      else if (!PV_HAS_PRICE && PV_HAS_POVR && price != null) { cols.push('price_override'); vals.push(price); }
+      if (PV_HAS_ACTIVE) { cols.push('is_active'); vals.push(true); }
+      if (PV_HAS_STOCK)  { cols.push('stock');     vals.push(0); }
+      if (PV_HAS_IMG && imageUrl) { cols.push('image_url'); vals.push(imageUrl); }
+
+      const ph = cols.map((_,i)=>`$${i+1}`).join(',');
+      const ins = await client.query(
+        `INSERT INTO product_variants (${cols.join(',')})
+         VALUES (${ph})
+         RETURNING ${PV_PK} AS variant_id`,
+        vals
+      );
+      const variant_id = ins.rows[0].variant_id;
+
+      // map option values ตาม orderedOptions
+      for (let i=0; i<orderedOptions.length; i++) {
+        const optName = orderedOptions[i].option_name;
+        const valObj = it.details.find(d => normText(d.name) === optName);
+        const valName = normText(valObj?.value);
+        const value_id = optionValueIdMap[optName]?.[valName];
+        if (!value_id) continue;
+        await client.query(
+          `INSERT INTO product_variant_values (${PVV_VAR_COL}, ${PVV_OPT_COL}, ${PVV_VAL_COL})
+           VALUES ($1,$2,$3)`,
+          [variant_id, optionIdByIndex[i], value_id]
+        );
+      }
+
+      // แนบรูปเข้า product_images หากส่งเป็น images[]
+      if (Array.isArray(it.images) && it.images.length) {
+        const hasPrimary = it.images.some(i => i && i.is_primary);
+        if (hasPrimary) await unsetPrimaryExcept(client, productId);
+        for (const raw of it.images) {
+          const img = normalizeImagePayload(raw);
+          if (!img) continue;
+          await client.query(
+            `INSERT INTO product_images (product_id, url, alt_text, is_primary, position, variant_id)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [productId, img.url, img.alt_text, !!img.is_primary,
+             img.position != null ? Number(img.position) : null, variant_id]
+          );
+        }
+      }
+
+      created.push({ variant_id, sku, price });
+    }
+
+    await client.query('COMMIT');
+    return res.json({ ok: true, product_id: productId, variants: created });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('❌ ERROR: /admin/products/:id/variants/generate', e);
+    return res.status(500).json({ message: 'Generate variants error' });
+  } finally {
+    client.release?.();
+  }
+});
+
+/* ======================================================================
+ * GET /api/admin/products (paged)
+ * ==================================================================== */
 router.get('/', nocache, async (req, res)  => {
   try {
     const {
@@ -89,13 +544,11 @@ router.get('/', nocache, async (req, res)  => {
     const hasSU           = await hasColumn('products', 'size_unit_id');
     const hasPrice        = await hasColumn('products', 'price');
 
-    const useView         = await hasTable('v_product_variants_live_stock');
     const { puKey, suKey } = await getUnitKeys();
 
     const selImageUrl   = hasImageUrl ? 'p.image_url' : 'cv.cover_url AS image_url';
     const selPrice      = hasPrice ? 'p.price::numeric' : 'NULL::numeric AS price';
 
-    // คอลัมน์ published (เลือกอันที่มี)
     const selPublished  = hasIsPublished
       ? 'COALESCE(p.is_published, TRUE) AS is_published'
       : (hasPublished ? 'COALESCE(p.published, TRUE) AS is_published' : 'TRUE AS is_published');
@@ -129,7 +582,6 @@ router.get('/', nocache, async (req, res)  => {
       else if (hasArchivedAt) where.push(`p.archived_at IS NULL`);
     }
 
-    // ฟิลเตอร์ published ถ้าผู้ใช้ส่งมา และมีคอลัมน์
     if (published !== undefined && String(published).trim() !== '') {
       const val = ['1','true','yes','y'].includes(String(published).toLowerCase());
       if (hasIsPublished) where.push(`COALESCE(p.is_published, TRUE) = ${val ? 'TRUE' : 'FALSE'}`);
@@ -145,9 +597,8 @@ router.get('/', nocache, async (req, res)  => {
     const psInt = Math.min(Math.max(parseInt(page_size, 10) || 20, 1), 100);
     const offset = (pInt - 1) * psInt;
 
-    params.push(psInt, offset);
-    const limitIdx  = params.length - 1;
-    const offsetIdx = params.length;
+    const limitIdx  = (params.push(psInt), params.length);
+    const offsetIdx = (params.push(offset), params.length);
 
     const sql = `
       WITH base AS (
@@ -195,10 +646,10 @@ router.get('/', nocache, async (req, res)  => {
       LEFT JOIN product_categories c ON c.category_id = p.category_id
       LEFT JOIN subcategories      sc ON sc.subcategory_id = p.subcategory_id
       LEFT JOIN product_statuses   ps ON ps.product_status_id = p.product_status_id
-      ${puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : ''}
-      ${suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : ''}
+      ${ puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : '' }
+      ${ suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : '' }
 
-      ${useView ? `
+      ${ (await hasTable('v_product_variants_live_stock')) ? `
         LEFT JOIN LATERAL (
           SELECT
             COALESCE(SUM(v.stock),0)::int AS stock,
@@ -214,7 +665,7 @@ router.get('/', nocache, async (req, res)  => {
     const { rows } = await db.query(sql, params);
     const total = rows.length ? Number(rows[0].__total) : 0;
 
-    // ✅ อัปเดตสถานะตาม stock แบบปลอดภัย + อัปเดต DB เฉพาะเมื่อจำเป็น
+    // decorate status by stock (optional)
     const canUpdateStatusCol = await hasColumn('products', 'product_status_id');
     const hasStatusTable     = await hasTable('product_statuses');
     let outOfStockStatusId   = null;
@@ -230,13 +681,12 @@ router.get('/', nocache, async (req, res)  => {
       outOfStockStatusId = stRows[0]?.product_status_id ?? null;
     }
 
-    const items = [];
+    const itemsOut = [];
     for (const r of rows) {
       const stock = Number(r.stock ?? 0);
 
       if (stock <= 0) {
         r.product_status_name = 'สินค้าหมด';
-
         if (outOfStockStatusId != null && r.product_status_id !== outOfStockStatusId) {
           try {
             await db.query(
@@ -245,22 +695,21 @@ router.get('/', nocache, async (req, res)  => {
                WHERE product_id = $1`,
               [r.product_id, outOfStockStatusId]
             );
-            r.product_status_id = outOfStockStatusId; // sync value สำหรับ response
+            r.product_status_id = outOfStockStatusId;
           } catch (e) {
             console.warn('⚠ อัปเดตสถานะ "สินค้าหมด" ไม่สำเร็จ:', e?.message || e);
           }
         }
       } else if (stock > 0 && stock <= 5) {
         r.product_status_name = 'สต็อกใกล้หมด';
-        console.warn(`⚠ สินค้าใกล้หมด: ${r.product_name} (เหลือ ${stock})`);
       } else {
         r.product_status_name = 'พร้อมจำหน่าย';
       }
 
-      items.push(r);
+      itemsOut.push(r);
     }
 
-    return res.json({ items, total, page: pInt, page_size: psInt });
+    return res.json({ items: itemsOut, total, page: pInt, page_size: psInt });
 
   } catch (error) {
     console.error('❌ ERROR: ดึงข้อมูลสินค้าไม่สำเร็จ:', error);
@@ -268,9 +717,9 @@ router.get('/', nocache, async (req, res)  => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
- * GET /api/admin/products/:id
- * ──────────────────────────────────────────────────────────── */
+/* ======================================================================
+ * GET /api/admin/products/:id (safe images select)
+ * ==================================================================== */
 router.get('/:id', nocache, async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -301,11 +750,12 @@ router.get('/:id', nocache, async (req, res) => {
 
     const product = rows[0];
 
+    // รูปภาพ (ไม่อ้างอิง product_images.id)
     const imgsQ = await db.query(`
-      SELECT id, url, alt_text, is_primary, position, variant_id, created_at
+      SELECT url, alt_text, is_primary, position, variant_id, created_at
       FROM product_images
       WHERE product_id = $1
-      ORDER BY is_primary DESC, position ASC, id ASC
+      ORDER BY is_primary DESC, COALESCE(position,0) ASC, COALESCE(created_at, NOW()) ASC
     `, [id]);
     const images = imgsQ.rows;
 
@@ -337,10 +787,11 @@ router.get('/:id', nocache, async (req, res) => {
       if (product.min_price == null) product.min_price = product.price ?? null;
     } else {
       const vq = await db.query(`
-        SELECT variant_id, product_id, sku, NULL::numeric AS price, 0::int AS stock
+        SELECT ${ (await hasColumn('product_variants','variant_id')) ? 'variant_id' : (await hasColumn('product_variants','product_variant_id')) ? 'product_variant_id AS variant_id' : 'id AS variant_id' },
+               product_id, sku, NULL::numeric AS price, 0::int AS stock
         FROM product_variants
         WHERE product_id = $1
-        ORDER BY variant_id ASC
+        ORDER BY 1 ASC
       `, [id]);
       variants = vq.rows;
       product.live_stock = 0;
@@ -356,15 +807,15 @@ router.get('/:id', nocache, async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
- * POST /api/admin/products  (รับ category_id เป็น TEXT)
- * ──────────────────────────────────────────────────────────── */
+/* ======================================================================
+ * POST /api/admin/products  (category_id is TEXT)
+ * ==================================================================== */
 router.post('/', async (req, res) => {
   try {
     let {
       product_name, productName,
       description,
-      price,           // ✅ ใหม่
+      price,
       category_id,    categoryId,
       subcategory_id, subcategoryId,
 
@@ -375,8 +826,8 @@ router.post('/', async (req, res) => {
       origin,
       product_status_id, productStatusId,
 
-      is_published,    // แบบที่ 1
-      published        // แบบที่ 2
+      is_published,
+      published
     } = req.body;
 
     product_name      = product_name ?? productName;
@@ -389,9 +840,7 @@ router.post('/', async (req, res) => {
     }
 
     const pr = toNum(price);
-    if (pr == null || Number(pr) < 0) {
-      return res.status(400).json({ message: 'price ต้องเป็นตัวเลข ≥ 0' });
-    }
+    if (pr == null || pr < 0) return res.status(400).json({ message: 'price ต้องเป็นตัวเลข ≥ 0' });
 
     const catId = category_id == null ? '' : String(category_id).trim();
     if (!catId) return res.status(400).json({ message: 'กรุณาเลือกหมวดหมู่ (category_id)' });
@@ -474,9 +923,9 @@ router.post('/', async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
+/* ======================================================================
  * PUT /api/admin/products/:id
- * ──────────────────────────────────────────────────────────── */
+ * ==================================================================== */
 router.put('/:id', async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -517,7 +966,7 @@ router.put('/:id', async (req, res) => {
 
     if (price !== undefined) {
       const pr = toNum(price);
-      if (pr == null || Number(pr) < 0) return res.status(400).json({ message: 'price ต้องเป็นตัวเลข ≥ 0' });
+      if (pr == null || pr < 0) return res.status(400).json({ message: 'price ต้องเป็นตัวเลข ≥ 0' });
       push('price', pr);
     }
 
@@ -588,9 +1037,9 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
+/* ======================================================================
  * DELETE → Archive
- * ──────────────────────────────────────────────────────────── */
+ * ==================================================================== */
 router.delete('/:id', async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -635,9 +1084,9 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
+/* ======================================================================
  * UNARCHIVE
- * ──────────────────────────────────────────────────────────── */
+ * ==================================================================== */
 router.patch('/:id/unarchive', async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -674,11 +1123,9 @@ router.patch('/:id/unarchive', async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
- * PUBLISH / UNPUBLISH (รองรับทั้ง is_published / published)
- *  - ถ้า body มี is_published(boolean) → เซ็ตตามนั้น
- *  - ถ้าไม่ส่ง → toggle ค่าเดิม (NOT COALESCE(col, TRUE))
- * ──────────────────────────────────────────────────────────── */
+/* ======================================================================
+ * PUBLISH / UNPUBLISH (supports is_published / published)
+ * ==================================================================== */
 router.patch('/:id/publish', async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -691,7 +1138,7 @@ router.patch('/:id/publish', async (req, res) => {
     }
     const col = hasIsPublished ? 'is_published' : 'published';
 
-    const desired = req.body?.is_published; // true/false หรือ undefined
+    const desired = req.body?.is_published;
     let rows;
 
     if (typeof desired === 'boolean') {
@@ -719,7 +1166,6 @@ router.patch('/:id/publish', async (req, res) => {
   }
 });
 
-// (คง unpublish แยกไว้ เผื่อ client เก่าเรียกอยู่)
 router.patch('/:id/unpublish', async (req, res) => {
   try {
     const id = toInt(req.params.id);
@@ -745,23 +1191,9 @@ router.patch('/:id/unpublish', async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
- * รูปสินค้าหลายรูป / เดี่ยว
- * ──────────────────────────────────────────────────────────── */
-function normalizeImagePayload(img) {
-  if (!img || typeof img !== 'object') return null;
-  const url = (img.url || img.image_url || '').trim();
-  if (!url) return null;
-  const alt_text = (img.alt_text || img.alt || null);
-  const is_primary = Boolean(img.is_primary);
-  const position = img.position != null ? Number(img.position) : null;
-  const variant_id = img.variant_id != null ? Number(img.variant_id) : null;
-  return { url, alt_text, is_primary, position, variant_id };
-}
-async function unsetPrimaryExcept(client, productId) {
-  await client.query(`UPDATE product_images SET is_primary = false WHERE product_id = $1`, [productId]);
-}
-
+/* ======================================================================
+ * Images (bulk + single) — NO reference to product_images.id
+ * ==================================================================== */
 router.post('/:id/images', async (req, res) => {
   const productId = toInt(req.params.id);
   if (productId == null) return res.status(400).json({ error: 'Invalid product id' });
@@ -769,7 +1201,7 @@ router.post('/:id/images', async (req, res) => {
   const list = Array.isArray(req.body?.images) ? req.body.images : [];
   if (list.length === 0) return res.status(400).json({ error: 'กรุณาส่ง images เป็น array อย่างน้อย 1 รายการ' });
 
-  const client = await db.getClient();
+  const client = await getClient();
   try {
     await client.query('BEGIN');
 
@@ -781,21 +1213,26 @@ router.post('/:id/images', async (req, res) => {
       const img = normalizeImagePayload(raw);
       if (!img) continue;
 
-      const q = `
-        INSERT INTO product_images (product_id, url, alt_text, is_primary, position, variant_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, product_id, url, alt_text, is_primary, position, variant_id, created_at
-      `;
-      const params = [
-        productId,
-        img.url,
-        img.alt_text,
-        img.is_primary === true,
-        img.position != null ? Number(img.position) : null,
-        img.variant_id != null ? Number(img.variant_id) : null
-      ];
-      const { rows } = await client.query(q, params);
-      inserted.push(rows[0]);
+      await client.query(
+        `INSERT INTO product_images (product_id, url, alt_text, is_primary, position, variant_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          productId,
+          img.url,
+          img.alt_text,
+          img.is_primary === true,
+          img.position != null ? Number(img.position) : null,
+          img.variant_id != null ? Number(img.variant_id) : null
+        ]
+      );
+      inserted.push({
+        product_id: productId,
+        url: img.url,
+        alt_text: img.alt_text ?? null,
+        is_primary: !!img.is_primary,
+        position: img.position ?? null,
+        variant_id: img.variant_id ?? null
+      });
     }
 
     await client.query('COMMIT');
@@ -805,7 +1242,7 @@ router.post('/:id/images', async (req, res) => {
     console.error('❌ ERROR: บันทึกรูปแบบ bulk ไม่สำเร็จ:', err);
     return res.status(500).json({ error: 'Save images error' });
   } finally {
-    client.release();
+    client.release?.();
   }
 });
 
@@ -815,38 +1252,42 @@ async function insertSingleImage(payload, res) {
   if (productId == null) return res.status(400).json({ error: 'กรุณาระบุ product_id ให้ถูกต้อง' });
   if (!img) return res.status(400).json({ error: 'กรุณาระบุ url ของรูป' });
 
-  const client = await db.getClient();
+  const client = await getClient();
   try {
     await client.query('BEGIN');
 
     if (img.is_primary === true) await unsetPrimaryExcept(client, productId);
 
-    const q = `
-      INSERT INTO product_images (product_id, url, alt_text, is_primary, position, variant_id)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, product_id, url, alt_text, is_primary, position, variant_id, created_at
-    `;
-    const params = [
-      productId,
-      img.url,
-      img.alt_text,
-      img.is_primary === true,
-      img.position != null ? Number(img.position) : null,
-      img.variant_id != null ? Number(img.variant_id) : null
-    ];
-    const { rows } = await client.query(q, params);
+    await client.query(
+      `INSERT INTO product_images (product_id, url, alt_text, is_primary, position, variant_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        productId,
+        img.url,
+        img.alt_text,
+        img.is_primary === true,
+        img.position != null ? Number(img.position) : null,
+        img.variant_id != null ? Number(img.variant_id) : null
+      ]
+    );
 
     await client.query('COMMIT');
-    return res.status(201).json(rows[0]);
+    return res.status(201).json({
+      product_id: productId,
+      url: img.url,
+      alt_text: img.alt_text ?? null,
+      is_primary: !!img.is_primary,
+      position: img.position ?? null,
+      variant_id: img.variant_id ?? null
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ ERROR: บันทึกรูป (เดี่ยว) ไม่สำเร็จ:', err);
     return res.status(500).json({ error: 'Save image error' });
   } finally {
-    client.release();
+    client.release?.();
   }
 }
 router.post('/product-images', async (req, res) => insertSingleImage(req.body, res));
-// 🚫 ลบ path แปลก '/../product-images' ออก
 
 module.exports = router;

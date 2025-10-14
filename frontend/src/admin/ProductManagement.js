@@ -71,6 +71,19 @@ export default function ProductManagement() {
     product_status_id: ''
   });
 
+  // ★ VARIANTS QUICK MODE — state
+  const [quickVar, setQuickVar] = useState({
+    enabled: false,
+    // option names + values (สูงสุด 3)
+    opt1Name: 'สี', opt1Value: '',
+    opt2Name: 'ขนาด', opt2Value: '',
+    opt3Name: '', opt3Value: '',
+    sku: '',
+    price: '',   // ถ้าใส่ จะ override ราคาระดับ variant (ไม่ใส่ = ใช้ราคาสินค้า)
+    stock: '',   // จำนวนคงเหลือเริ่มต้นของ variant เดียว
+    is_active: true
+  });
+
   // ✨ refs
   const catRef = useRef(null);
   const formTopRef = useRef(null);
@@ -91,9 +104,9 @@ export default function ProductManagement() {
       const { data } = await api.get(path('/admin/products'), {
         params: { include_archived: showArchived ? 1 : 0 }
       });
-      let items = Array.isArray(data?.items) ? data.items : data;
+      let items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
 
-      // ✅ ผูกสถานะจาก stock เพื่อแสดงผล (ให้สอดคล้องกับ BE)
+      // ✅ ผูกสถานะจาก stock เพื่อแสดงผล
       items = (items || []).map(p => {
         const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
         if (stock <= 0) {
@@ -293,6 +306,45 @@ export default function ProductManagement() {
     setSelectedFiles([]);
     setIsEditing(false);
     setEditProductId(null);
+
+    // ★ reset quick variant
+    setQuickVar({
+      enabled: false,
+      opt1Name: 'สี', opt1Value: '',
+      opt2Name: 'ขนาด', opt2Value: '',
+      opt3Name: '', opt3Value: '',
+      sku: '', price: '', stock: '', is_active: true
+    });
+  };
+
+  // ★ VARIANTS QUICK MODE — helper
+  const buildQuickVariantPayload = (product_id, uploadedUrls) => {
+    const opts = [];
+    const pushOpt = (name, value) => {
+      const n = (name || '').trim();
+      const v = (value || '').trim();
+      if (n && v) opts.push({ name: n, value: v });
+    };
+    pushOpt(quickVar.opt1Name, quickVar.opt1Value);
+    pushOpt(quickVar.opt2Name, quickVar.opt2Value);
+    pushOpt(quickVar.opt3Name, quickVar.opt3Value);
+
+    const vPrice = asStr(quickVar.price).trim();
+    const vStock = asStr(quickVar.stock).trim();
+
+    const images = (uploadedUrls || []).map((url, i) => ({
+      url, is_primary: i === 0, position: i + 1
+    }));
+
+    return {
+      product_id,
+      options: opts,                // [{name,value}, ...]
+      sku: (quickVar.sku || '').trim() || null,
+      price: vPrice !== '' ? Number.parseInt(vPrice, 10) : null,
+      stock: vStock !== '' ? Number.parseInt(vStock, 10) : null,
+      is_active: !!quickVar.is_active,
+      images
+    };
   };
 
   /* ---------- Submit ---------- */
@@ -324,6 +376,7 @@ export default function ProductManagement() {
     if (sizeV !== null && suId == null) { push('กรุณาเลือก “หน่วยของขนาด” ให้ครบ', 'warn'); return; }
     if (sizeV === null && suId !== null) { push('กรุณากรอก “ขนาดสินค้า (ตัวเลข)” ให้ครบ', 'warn'); return; }
 
+    // อัปโหลดรูปสินค้า (ถ้ามี)
     let uploadedUrls = [];
     if (selectedFiles.length > 0) {
       try { uploadedUrls = (await Promise.all(selectedFiles.map(f => uploadImage(f)))).filter(Boolean); }
@@ -354,6 +407,7 @@ export default function ProductManagement() {
         push('🎉 เพิ่มสินค้าเรียบร้อย', 'ok');
       }
 
+      // บันทึกรูปสินค้าเข้าตารางรูป
       if (createdId && uploadedUrls.length > 0) {
         const imagesPayload = uploadedUrls.map((url, i) => ({
           url, alt_text: previews[i]?.name || null, is_primary: i === 0, position: i + 1
@@ -376,6 +430,22 @@ export default function ProductManagement() {
               console.warn('⚠ บันทึกรูปไม่สำเร็จ', err?.response?.data || err?.message || err);
             }
           }
+        }
+      }
+
+      // ★ VARIANTS QUICK MODE — ถ้าเปิดไว้ ให้สร้าง/อัปเดต Variant เดียวหลังสร้างสินค้า
+      if (!isEditing && createdId && quickVar.enabled) {
+        try {
+          const payload = buildQuickVariantPayload(createdId, uploadedUrls);
+          // ทั้งชื่อ option และ value ต้องมีอย่างน้อย 1 คู่ จึงจะยิง
+          if ((payload.options || []).length > 0) {
+            await api.post(path('/api/variants/upsert-single'), payload);
+            push('🧩 สร้าง Variant สำเร็จ (โหมดเร็ว)', 'ok');
+          } else {
+            push('ℹ️ ไม่ได้สร้าง Variant: กรุณากรอกอย่างน้อย 1 ตัวเลือกและค่า', 'warn');
+          }
+        } catch (err) {
+          handleApiError(err, '❌ สร้าง Variant (โหมดเร็ว) ไม่สำเร็จ');
         }
       }
 
@@ -537,29 +607,28 @@ export default function ProductManagement() {
       </div>
 
       {/* แจ้งเตือนสรุปสต็อก */}
-     {(lowStockItems.length > 0) && (
-  <div className="pm-alertbar">
-    <button
-      type="button"
-      className="pm-alert warn"
-      onClick={() => { setStockFilter('low'); }}
-      title="ดูเฉพาะสินค้าใกล้หมด (1–5)"
-    >
-      ⚠️ ใกล้หมด {lowStockItems.length} รายการ — คลิกเพื่อกรอง
-    </button>
+      {(lowStockItems.length > 0) && (
+        <div className="pm-alertbar">
+          <button
+            type="button"
+            className="pm-alert warn"
+            onClick={() => { setStockFilter('low'); }}
+            title="ดูเฉพาะสินค้าใกล้หมด (1–5)"
+          >
+            ⚠️ ใกล้หมด {lowStockItems.length} รายการ — คลิกเพื่อกรอง
+          </button>
 
-    {(stockFilter !== 'all') && (
-      <button
-        type="button"
-        className="pm-alert clear"
-        onClick={() => setStockFilter('all')}
-      >
-        ล้างตัวกรอง
-      </button>
-    )}
-  </div>
-)}
-
+          {(stockFilter !== 'all') && (
+            <button
+              type="button"
+              className="pm-alert clear"
+              onClick={() => setStockFilter('all')}
+            >
+              ล้างตัวกรอง
+            </button>
+          )}
+        </div>
+      )}
 
       {/* form panel */}
       <div className="pm-panel">
@@ -682,6 +751,79 @@ export default function ProductManagement() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* ★ VARIANTS QUICK MODE — พับ/กาง กล่องกรอกตัวเลือก */}
+          <div className="frm col-span-2">
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={quickVar.enabled}
+                onChange={e=>setQuickVar(q=>({...q, enabled: e.target.checked}))}
+              />
+              <span>ตัวเลือก/ขนาด (โหมดเร็ว) — สร้าง Variant พร้อมเพิ่มสินค้า</span>
+            </label>
+          </div>
+
+          {quickVar.enabled && (
+            <div className="pm-quick-variant col-span-2">
+              <div className="pm-input-group pm-row-3">
+                <div className="frm">
+                  <label>ชื่อตัวเลือก 1</label>
+                  <input value={quickVar.opt1Name} onChange={e=>setQuickVar(q=>({...q, opt1Name: e.target.value}))} placeholder="เช่น สี" />
+                </div>
+                <div className="frm">
+                  <label>ค่า</label>
+                  <input value={quickVar.opt1Value} onChange={e=>setQuickVar(q=>({...q, opt1Value: e.target.value}))} placeholder="เช่น เขียว" />
+                </div>
+                <div className="frm">
+                  <label>SKU (ถ้ามี)</label>
+                  <input value={quickVar.sku} onChange={e=>setQuickVar(q=>({...q, sku: e.target.value}))} placeholder="เช่น PMJ-001-GRN" />
+                </div>
+              </div>
+
+              <div className="pm-input-group pm-row-3">
+                <div className="frm">
+                  <label>ชื่อตัวเลือก 2</label>
+                  <input value={quickVar.opt2Name} onChange={e=>setQuickVar(q=>({...q, opt2Name: e.target.value}))} placeholder="เช่น ขนาด" />
+                </div>
+                <div className="frm">
+                  <label>ค่า</label>
+                  <input value={quickVar.opt2Value} onChange={e=>setQuickVar(q=>({...q, opt2Value: e.target.value}))} placeholder="เช่น M / 6 นิ้ว" />
+                </div>
+                <div className="frm">
+                  <label>สถานะขาย</label>
+                  <select value={quickVar.is_active ? '1':'0'} onChange={e=>setQuickVar(q=>({...q, is_active: e.target.value==='1'}))}>
+                    <option value="1">เปิดขาย</option>
+                    <option value="0">ปิดขาย</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="pm-input-group pm-row-3">
+                <div className="frm">
+                  <label>ชื่อตัวเลือก 3 (ถ้าต้องการ)</label>
+                  <input value={quickVar.opt3Name} onChange={e=>setQuickVar(q=>({...q, opt3Name: e.target.value}))} placeholder="เช่น วัสดุ" />
+                </div>
+                <div className="frm">
+                  <label>ค่า</label>
+                  <input value={quickVar.opt3Value} onChange={e=>setQuickVar(q=>({...q, opt3Value: e.target.value}))} placeholder="เช่น เซรามิก" />
+                </div>
+                <div className="frm">
+                  <label>สต็อก (จำนวนเต็ม)</label>
+                  <input type="number" min="0" step="1" value={quickVar.stock} onChange={e=>setQuickVar(q=>({...q, stock: e.target.value}))} placeholder="เช่น 10" />
+                </div>
+              </div>
+
+              <div className="pm-input-group pm-row-3">
+                <div className="frm">
+                  <label>ราคาของ Variant (ถ้าว่าง = ใช้ราคาสินค้า)</label>
+                  <input type="number" min="0" step="1" value={quickVar.price} onChange={e=>setQuickVar(q=>({...q, price: e.target.value}))} placeholder="เช่น 180" />
+                </div>
+              </div>
+
+              <div className="hint">หากกรอก “ชื่อตัวเลือก + ค่า” อย่างน้อย 1 คู่ ระบบจะสร้าง Variant เดียวนี้ให้หลังเพิ่มสินค้า และผูกรูปที่อัปโหลดไว้เข้ากับ Variant ด้วย</div>
             </div>
           )}
 

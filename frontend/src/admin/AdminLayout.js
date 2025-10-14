@@ -11,22 +11,24 @@ export default function AdminLayout() {
   const [newOrders, setNewOrders] = useState(0);
   const lastCheckRef = useRef(null);
 
-  // ดึง productId ปัจจุบันจากพาธ
-  const match = location.pathname.match(/\/admin\/products\/(\d+)/);
-  const currentProductId = match ? match[1] : null;
+  const m = location.pathname.match(/\/admin\/products\/([^/]+)/);
+const pid = m ? m[1] : null;
+// กันเคสพิเศษที่ไม่ใช่สินค้าเฉพาะชิ้น
+const currentProductId = (pid && pid !== "all" && pid !== "new") ? pid : null;
 
   const menus = [
-    { label: "Dashboard",     icon: "📊", path: "/admin" },
-    { label: "จัดการสินค้า",   icon: "📦", path: "/admin/products" },
-    { label: "ประเภท",         icon: "📂", path: "/admin/categories" },
-    { label: "หมวดย่อย",       icon: "🗂️", path: "/admin/subcategories" },
-    { label: "หน่วยสินค้า",     icon: "📏", path: "/admin/units" },
-    { label: "หน่วยขนาด",      icon: "📐", path: "/admin/sizes" },
-    { label: "สินค้าคงคลัง",   icon: "🏬", path: "/admin/inventory" },
-    { label: "คำสั่งซื้อ",      icon: "🧾", path: "/admin/orders", badge: true },
-    { label: "สรุปยอดขาย",     icon: "💰", path: "/admin/reports" },
-     { label: "ผู้ใช้/สิทธิ์",    icon: "👤", path: "/admin/user-management" },
-  ];
+  { label: "Dashboard",          icon: "📊", path: "/admin",               exact: true },
+  { label: "เพิ่มและจัดการสินค้า", icon: "📦", path: "/admin/products",     exact: true },
+  { label: "สินค้าทั้งหมด",       icon: "🗃️", path: "/admin/products/all", exact: true },
+  { label: "ประเภท",              icon: "📂", path: "/admin/categories" },
+  { label: "หมวดย่อย",            icon: "🗂️", path: "/admin/subcategories" },
+  { label: "หน่วยสินค้า",          icon: "📏", path: "/admin/units" },
+  { label: "หน่วยขนาด",           icon: "📐", path: "/admin/sizes" },
+  { label: "สินค้าคงคลัง",        icon: "🏬", path: "/admin/inventory" },
+  { label: "คำสั่งซื้อ",           icon: "🧾", path: "/admin/orders", badge: true },
+  { label: "สรุปยอดขาย",          icon: "💰", path: "/admin/reports" },
+  { label: "ผู้ใช้/สิทธิ์",         icon: "👤", path: "/admin/user-management" },
+];
 
   const logout = () => {
     localStorage.removeItem("token");
@@ -75,7 +77,7 @@ export default function AdminLayout() {
             <NavLink
               key={i}
               to={m.path}
-              end={m.path === "/admin"}
+              end={!!m.exact}
               className={({ isActive }) =>
                 `flex items-center justify-between px-3 py-2 rounded-lg ${
                   isActive ? "bg-green-500 text-white" : "hover:bg-green-100"

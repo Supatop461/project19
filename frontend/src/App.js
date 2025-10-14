@@ -12,6 +12,7 @@ import AdminLayout       from "./admin/AdminLayout";
 import Dashboard         from "./admin/Dashboard";
 import ProductEditPage   from "./admin/ProductEditPage";
 import InventoryPage     from "./admin/InventoryPage";
+import AllProducts from "./admin/AllProducts";
 
 import AdminCategories    from "./admin/AdminCategories";
 import AdminSubcategories from "./admin/AdminSubcategories";
@@ -150,6 +151,7 @@ function InnerApp() {
           <Route path="sizes" element={<AdminSizes />} />
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="user-management" element={<UserManagement />} />
+          <Route path="products/all" element={<AllProducts />} />
         </Route>
 
         <Route path="/login" element={<Login />} />

@@ -9,10 +9,36 @@ const asInt = (v) => (v === null || v === undefined || v === '' ? null : parseIn
 router.get('/__product-images-ping', (_req, res) => res.json({ ok: true, where: 'productImages' }));
 
 /* ----------------------------- Helpers ----------------------------- */
+function canonicalImageUrl(input) {
+  if (!input) return '';
+  let u = String(input).trim();
+
+  // ถ้าเป็น full URL ให้ตัด origin เหลือเฉพาะ path /uploads/...
+  try {
+    const parsed = new URL(u);
+    if (/\/uploads\/.+/.test(parsed.pathname)) {
+      u = parsed.pathname;
+    }
+  } catch (_) {
+    // ไม่ใช่ absolute URL ก็ข้าม
+  }
+
+  // 'uploads/xxx.jpg' → เติม '/' ข้างหน้า
+  if (/^uploads\//i.test(u)) u = `/${u}`;
+
+  // ถ้ายังไม่ขึ้นต้นด้วย /uploads/ → บังคับเข้าที่ /uploads
+  if (!u.startsWith('/uploads/')) {
+    const fname = u.replace(/^\/+/, '');
+    u = `/uploads/${fname}`;
+  }
+  return u;
+}
+
 function normalizeImagePayload(it) {
   if (!it || typeof it !== 'object') return null;
-  const url = (it.url || it.image_url || '').trim();
-  if (!url) return null;
+  const raw = (it.url || it.image_url || '').trim();
+  if (!raw) return null;
+  const url = canonicalImageUrl(raw);
   return {
     url,
     alt_text: it.alt_text ?? it.alt ?? null,
@@ -204,7 +230,6 @@ router.post('/product-images', async (req, res) => {
 /**
  * PATCH /api/products/:productId/images/reorder
  * body.order = [{ id: image_id, position: number }, ...]
- * เทคนิคสองเฟสกันชนค่า position (ถ้ามี unique/constraint): set ชั่วคราว -> set ตำแหน่งจริง
  */
 router.patch('/products/:productId/images/reorder', async (req, res) => {
   const productId = asInt(req.params.productId);
