@@ -1,7 +1,7 @@
 // backend/routes/publicProducts.js
 // ดึง “สินค้าทั้งหมด” + best-sellers (มีสุ่ม fallback)
-// ✅ ค่าเริ่มต้น: products.limit=60, best-sellers.limit=12
-// ✅ คืนรูปแบบ { items, total } (ยกเว้น /:productId ที่คืน object เดียว)
+// default: products.limit=60, best-sellers.limit=12
+// คืน { items, total } (ยกเว้น /:productId ที่คืน object เดี่ยว)
 
 const express = require('express');
 
@@ -11,7 +11,6 @@ try { db = require('../db'); } catch { db = require('../db/db'); }
 const router = express.Router();
 router.get('/_ping', (_req, res) => res.json({ ok: true }));
 
-/* ----------------- helpers ----------------- */
 function toInt(v, def = 0, min = -2147483648, max = 2147483647) {
   const n = parseInt(v, 10);
   if (!Number.isFinite(n)) return def;
@@ -48,7 +47,6 @@ async function getSchemaFlags() {
   const catPub  = (await hasColumn('product_categories','is_published')) ? 'COALESCE(c.is_published,TRUE) = TRUE' : 'TRUE';
   const subPub  = (await hasColumn('subcategories','is_published'))     ? 'COALESCE(sc.is_published,TRUE) = TRUE' : 'TRUE';
   const hasImageUrl = await hasColumn('products','image_url');
-
   return { publishedCol, archivedFilter, catPub, subPub, hasImageUrl };
 }
 
@@ -96,55 +94,32 @@ async function buildSelectGroup({ where }) {
   ];
 
   const groupBy = [
-    'p.product_id',
-    'p.product_name',
-    'p.description',
+    'p.product_id','p.product_name','p.description',
     hasImageUrl ? 'p.image_url' : null,
-    'cv.cover_url',
-    'p.category_id',
-    'c.category_name',
-    'p.subcategory_id',
-    'sc.subcategory_name',
+    'cv.cover_url','p.category_id','c.category_name','p.subcategory_id','sc.subcategory_name',
     (!useView && basePriceCol) ? basePriceCol : null,
   ].filter(Boolean);
 
   const joins = [
     useView ? 'LEFT JOIN v_product_variants_live_stock v ON v.product_id = p.product_id' : null,
-    `LEFT JOIN LATERAL (
-      SELECT MIN(pi.url) AS cover_url
-      FROM product_images pi
-      WHERE pi.product_id = p.product_id
-    ) cv ON TRUE`,
+    `LEFT JOIN LATERAL (SELECT MIN(pi.url) AS cover_url FROM product_images pi WHERE pi.product_id = p.product_id) cv ON TRUE`,
     'LEFT JOIN product_categories c ON c.category_id = p.category_id',
     'LEFT JOIN subcategories sc     ON sc.subcategory_id = p.subcategory_id',
   ].filter(Boolean);
 
   const whereConds = [
-    ...where,
-    `(${publishedCol} = TRUE)`,
-    `(${archivedFilter})`,
-    `(${catPub})`,
-    `(${subPub})`,
+    ...where, `(${publishedCol} = TRUE)`, `(${archivedFilter})`, `(${catPub})`, `(${subPub})`,
   ];
 
   return { useView, select, groupBy, joins, whereConds };
 }
 
-/* =========================================================
- * GET /api/products  → { items, total }
- * query: featured, category_id, subcategory_id, q, sort, limit, offset, include_archived
- * ========================================================= */
+/* ============== GET /api/products → {items,total} ================== */
 router.get('/', async (req, res) => {
   try {
     const {
-      featured,
-      category_id,
-      subcategory_id,
-      q,
-      sort = 'newest',
-      limit = 60,         // ⭐ default 60
-      offset = 0,
-      include_archived,
+      featured, category_id, subcategory_id, q,
+      sort = 'newest', limit = 60, offset = 0, include_archived,
     } = req.query || {};
 
     const lim = toInt(limit, 60, 1, 500);
@@ -161,15 +136,8 @@ router.get('/', async (req, res) => {
       const { archivedFilter } = await getSchemaFlags();
       where.push(archivedFilter);
     }
-
-    if (category_id) {
-      params.push(String(category_id));
-      where.push(`p.category_id = $${params.length}`);
-    }
-    if (subcategory_id) {
-      params.push(String(subcategory_id));
-      where.push(`p.subcategory_id = $${params.length}`);
-    }
+    if (category_id) { params.push(String(category_id)); where.push(`p.category_id = $${params.length}`); }
+    if (subcategory_id) { params.push(String(subcategory_id)); where.push(`p.subcategory_id = $${params.length}`); }
     if (q && String(q).trim() !== '') {
       const qq = `%${String(q).trim()}%`;
       params.push(qq, qq);
@@ -183,10 +151,9 @@ router.get('/', async (req, res) => {
     const { useView, select, groupBy, joins, whereConds } = await buildSelectGroup({ where });
 
     const baseSelectSql = `
-      SELECT
-        ${select.join(',\n        ')}
+      SELECT ${select.join(', ')}
       FROM products p
-      ${joins.join('\n      ')}
+      ${joins.join('\n')}
       ${whereConds.length ? 'WHERE ' + whereConds.join(' AND ') : ''}
       ${groupBy.length ? 'GROUP BY ' + groupBy.join(', ') : ''}
     `;
@@ -198,16 +165,14 @@ router.get('/', async (req, res) => {
           SELECT od.product_id, COALESCE(SUM(od.quantity), 0)::int AS sold_qty
           FROM order_details od
           LEFT JOIN orders o ON o.order_id = od.order_id
-          WHERE o.order_status_id IN ('o1','o2') -- ✅ ไม่มีช่องว่าง
+          WHERE o.order_status_id IN ('o1','o2') -- ไม่มีช่องว่าง
           GROUP BY od.product_id
         )
       `;
       sql = `
         ${soldCTE}
         SELECT x.*, COALESCE(s.sold_qty, 0) AS sold_qty
-        FROM (
-          ${baseSelectSql}
-        ) x
+        FROM (${baseSelectSql}) x
         LEFT JOIN sold s ON s.product_id = x.product_id
         ORDER BY ${buildSort('popular', { alias: 'x', useView, soldCol: 'COALESCE(s.sold_qty, 0)' })}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -230,20 +195,17 @@ router.get('/', async (req, res) => {
   }
 });
 
-/* =========================================================
- * GET /api/products/best-sellers  → { items, total }  (มีสุ่ม fallback)
- * ========================================================= */
+/* ======== GET /api/products/best-sellers → {items,total} ========== */
 router.get('/best-sellers', async (req, res) => {
   try {
-    const lim = toInt(req.query.limit || req.query.top || req.query.per_page || req.query.pageSize, 12, 1, 50); // ⭐ default 12
+    const lim = toInt(req.query.limit || req.query.top || req.query.per_page || req.query.pageSize, 12, 1, 50);
 
     const { useView, select, groupBy, joins, whereConds } = await buildSelectGroup({ where: [] });
 
     const baseSelectSql = `
-      SELECT
-        ${select.join(',\n        ')}
+      SELECT ${select.join(', ')}
       FROM products p
-      ${joins.join('\n      ')}
+      ${joins.join('\n')}
       ${whereConds.length ? 'WHERE ' + whereConds.join(' AND ') : ''}
       ${groupBy.length ? 'GROUP BY ' + groupBy.join(', ') : ''}
     `;
@@ -257,25 +219,17 @@ router.get('/best-sellers', async (req, res) => {
         GROUP BY od.product_id
       )
       SELECT x.*, COALESCE(s.sold_qty, 0) AS sold_qty
-      FROM (
-        ${baseSelectSql}
-      ) x
+      FROM (${baseSelectSql}) x
       LEFT JOIN sold s ON s.product_id = x.product_id
       ORDER BY ${buildSort('popular', { alias: 'x', useView, soldCol: 'COALESCE(s.sold_qty, 0)' })}
       LIMIT $1
     `;
 
     let { rows } = await db.query(sqlPopular, [lim]);
-
     if (!rows.length) {
-      const sqlRandom = `
-        ${baseSelectSql}
-        ORDER BY RANDOM()
-        LIMIT $1
-      `;
+      const sqlRandom = `${baseSelectSql} ORDER BY RANDOM() LIMIT $1`;
       ({ rows } = await db.query(sqlRandom, [lim]));
     }
-
     res.json({ items: rows, total: rows.length });
   } catch (err) {
     console.error('public products best-sellers error:', err);
@@ -283,9 +237,7 @@ router.get('/best-sellers', async (req, res) => {
   }
 });
 
-/* =========================================================
- * GET /api/products/:productId  → object เดี่ยว
- * ========================================================= */
+/* ============== GET /api/products/:productId (object) ============== */
 router.get('/:productId', async (req, res) => {
   try {
     const productId = toInt(req.params.productId);

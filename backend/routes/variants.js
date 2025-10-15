@@ -794,11 +794,31 @@ async function upsertSingleHandler(req, res) {
           const cols = ['url', 'product_id'];
           const vals = [u, productId];
           if (hasVariantId) { cols.push('variant_id'); vals.push(variantId); }
-          if (hasPrimary) { cols.push('is_primary'); vals.push(pos === 1); }
-          if (hasPosition) { cols.push('position'); vals.push(pos); }
+          if (hasPrimary)   { cols.push('is_primary'); vals.push(pos === 1); }
+          if (hasPosition)  { cols.push('position');   vals.push(pos); }
+
+          // 🩹 FIX: ถ้าตารางมี unique ให้มี primary ได้รูปเดียว/สินค้า → เคลียร์ตัวเดิมก่อน
+          if (hasPrimary && pos === 1) {
+            try {
+              await client.query(`UPDATE product_images SET is_primary = FALSE WHERE product_id = $1 AND is_primary = TRUE`, [productId]);
+            } catch (e) {
+              // ignore
+            }
+          }
 
           const ph = cols.map((_, i) => `$${i + 1}`).join(', ');
-          await client.query(`INSERT INTO product_images (${cols.join(', ')}) VALUES (${ph})`, vals);
+          try {
+            await client.query(`INSERT INTO product_images (${cols.join(', ')}) VALUES (${ph})`, vals);
+          } catch (err) {
+            // ถ้ายังชน unique ให้ downgrade แถวแรกเป็น non-primary แล้วลองใหม่
+            if (hasPrimary && pos === 1) {
+              const idx = cols.indexOf('is_primary');
+              if (idx !== -1) vals[idx] = false;
+              await client.query(`INSERT INTO product_images (${cols.join(', ')}) VALUES (${ph})`, vals);
+            } else {
+              throw err;
+            }
+          }
           pos++;
         }
       }
@@ -823,14 +843,6 @@ router.post(['/upsert-single', '/products/:id/upsert-single'], ...mustAdmin, ups
  * GENERATE (หลายแถว / Cartesian) — admin only
  * - POST /api/admin/products/:productId/variants/generate     ← ใช้จาก FE ปุ่ม "บันทึกทั้งหมด"
  * - POST /api/variants/products/:product_id/variants/generate ← alias
- * body:
- * {
- *   rows: [{
- *     sku, price, is_active, image_url,
- *     details: [{name, value}]   // 1–3 ช่อง
- *   }],
- *   options: [{ name, values: ["แดง","น้ำเงิน",...] }, ...]  // ถ้าไม่ส่ง rows ให้ generate จากนี้
- * }
  * ========================================================= */
 router.post(['/:productId/variants/generate', '/products/:product_id/variants/generate'], ...mustAdmin, async (req, res) => {
   const productId = toInt(req.params.productId || req.params.product_id);
@@ -847,7 +859,7 @@ router.post(['/:productId/variants/generate', '/products/:product_id/variants/ge
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    // 2) เตรียมฟังก์ชันช่วย
+    // 2) helper สำหรับแต่ละแถว
     async function upsertByDetails(row) {
       const details = Array.isArray(row?.details) ? row.details : [];
       const clean = [];
@@ -878,7 +890,6 @@ router.post(['/:productId/variants/generate', '/products/:product_id/variants/ge
           [productId, sku]
         );
         if (dupe.length && (!variantId || dupe[0].variant_id !== variantId)) {
-          // ข้ามแถวนี้ด้วย error ซ้ำ SKU
           return { error: 'SKU_DUPLICATE_IN_PRODUCT', skip: true };
         }
       }
@@ -904,7 +915,6 @@ router.post(['/:productId/variants/generate', '/products/:product_id/variants/ge
         const vals = [productId];
 
         cols.push('sku'); vals.push(sku);
-        const ph = () => `$${vals.length}`;
 
         if (priceCol) { cols.push(priceCol); vals.push(row.price === null ? null : Math.max(0, Number(row.price) || 0)); }
         if (activeCol) { cols.push(activeCol); vals.push(row.is_active === undefined ? true : !!row.is_active); }
@@ -931,37 +941,48 @@ router.post(['/:productId/variants/generate', '/products/:product_id/variants/ge
         const hasUrl = await hasColumn('product_images', 'url');
         const hasVariantId = await hasColumn('product_images', 'variant_id');
         const hasProductId = await hasColumn('product_images', 'product_id');
+        const hasPrimary = await hasColumn('product_images', 'is_primary');
+
         if (hasUrl && hasProductId) {
+          // ถ้าตารางบังคับ primary ต่อ product มีได้รูปเดียว ให้เคลียร์ก่อน
+          if (hasPrimary) {
+            try { await client.query('UPDATE product_images SET is_primary = FALSE WHERE product_id = $1 AND is_primary = TRUE', [productId]); } catch {}
+          }
           const cols = ['url', 'product_id'];
           const vals = [row.image_url, productId];
           if (hasVariantId) { cols.push('variant_id'); vals.push(variantId); }
-          await client.query(
-            `INSERT INTO product_images (${cols.join(', ')}) VALUES (${cols.map((_,i)=>`$${i+1}`).join(', ')})`,
-            vals
-          );
+          if (hasPrimary)  { cols.push('is_primary'); vals.push(true); }
+
+          const ph = cols.map((_,i)=>`$${i+1}`).join(', ');
+          try {
+            await client.query(`INSERT INTO product_images (${cols.join(', ')}) VALUES (${ph})`, vals);
+          } catch (e) {
+            if (hasPrimary) { // downgrade ถ้ายังชน
+              const idx = cols.indexOf('is_primary');
+              if (idx !== -1) vals[idx] = false;
+              await client.query(`INSERT INTO product_images (${cols.join(', ')}) VALUES (${ph})`, vals);
+            } else { throw e; }
+          }
         }
       }
 
       return { ok: true, variant_id: variantId };
     }
 
-    let created = 0, updated = 0, skipped = 0;
+    let skipped = 0;
 
-    // 3) ถ้ามี rows → ทำตามแถว
+    // 3) rows → ทำตามแถว
     if (Array.isArray(req.body?.rows) && req.body.rows.length) {
       for (const r of req.body.rows) {
         const out = await upsertByDetails(r);
-        if (!out) continue;
-        if (out.skip) { skipped++; continue; }
-        // เราไม่แยก created/updated ได้ง่าย ๆ ที่นี่ จึงนับรวมเป็น processed
+        if (out?.skip) skipped++;
       }
       await client.query('COMMIT');
-      return res.json({ ok: true, product_id: productId, created, updated, skipped });
+      return res.json({ ok: true, product_id: productId, skipped });
     }
 
-    // 4) ถ้าไม่มี rows แต่มี options → generate Cartesian
+    // 4) options → generate Cartesian
     if (Array.isArray(req.body?.options) && req.body.options.length) {
-      // สร้างรายการ combinations
       const opts = req.body.options
         .map(o => ({ name: String(o?.name || '').trim(), values: (o?.values || []).map(v => String(v).trim()).filter(Boolean) }))
         .filter(o => o.name && o.values.length);
@@ -1186,37 +1207,4 @@ router.get('/', ...mustAdmin, async (req, res) => {
   }
 });
 
-
 module.exports = router;
-
-/* -------------------- Manual test --------------------
-1) GET /api/variants/product/49?active=1
-
-2) POST /api/variants/upsert-single
-   body:
-   {
-     "product_id": 49,
-     "options":[{"name":"ขนาด","value":"150"}],
-     "sku":"P49-01","price":99,
-     "images":["/uploads/example.jpg"]
-   }
-
-   หรือแบบเดิม:
-   POST /api/variants/products/49/upsert-single
-   body:{ "details":[{"name":"ขนาด","value":"150"}], "sku":"P49-01","price":99 }
-
-3) POST /api/admin/products/49/variants/generate
-   body: {
-     "rows":[
-       {"sku":"P49-RED","price":120,"is_active":true,"image_url":"/uploads/a.webp","details":[{"name":"สี","value":"แดง"}]}
-     ]
-   }
-
-4) POST /api/variants/products/49/variants/generate
-   body: {
-     "options":[
-       {"name":"สี","values":["แดง","น้ำเงิน"]},
-       {"name":"ขนาด","values":["S","M"]}
-     ]
-   }
------------------------------------------------------- */

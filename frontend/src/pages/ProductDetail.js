@@ -9,6 +9,8 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, path } from "../lib/api";
 import { addItem } from "../lib/cart";
+import "./ProductDetail.css";
+
 
 /* -------------------- helpers -------------------- */
 const asInt = (v) =>

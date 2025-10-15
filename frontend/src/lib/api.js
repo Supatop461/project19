@@ -262,10 +262,10 @@ export const unpublishSizeUnit = (code) =>
 /*                              Dashboard                                 */
 /* ====================================================================== */
 export async function getNewOrdersCount({ updatedSince } = {}) {
-  const url = new URL(path('/orders/new-count'), window.location.origin);
-  if (updatedSince) url.searchParams.set('updated_since', updatedSince);
-  const { data } = await axios.get(url.toString());
-  return data?.count ?? 0;
+  // 🔧 แก้ให้ยิงไปที่ BASE_URL/3001 เสมอ ผ่าน instance `api`
+  const params = updatedSince ? { updated_since: updatedSince } : undefined;
+  const data = await GET('/orders/new-count', params);
+  return (data && data.count) ?? 0;
 }
 
 export const dashSummary = (params = {}) => GET_O('/dashboard/summary', params);

@@ -6,6 +6,24 @@ import { api, path, mediaSrc } from '../lib/api'; // ✅ ใช้ mediaSrc ก�
 import { useLookups } from '../lib/lookups';
 
 /* ---------- Helpers ---------- */
+
+// -------- SKU pretty formatter (hide empty parts) --------
+const _hasText = (v) => v !== null && v !== undefined && String(v).trim() !== '';
+const formatSkuLine = (s) => {
+  const parts = [];
+  if (_hasText(s.option_text)) parts.push(String(s.option_text));
+  if (s.price !== null && s.price !== undefined && String(s.price) !== '') {
+    const pv = Number(String(s.price).replace(/[\s,฿]/g, ''));
+    if (Number.isFinite(pv)) parts.push('฿' + pv.toLocaleString());
+  }
+  if (s.stock !== null && s.stock !== undefined && String(s.stock) !== '') {
+    const sv = Number(String(s.stock).replace(/[\s,]/g, ''));
+    if (Number.isFinite(sv)) parts.push('สต็อก ' + sv.toLocaleString());
+  }
+  if (_hasText(s.sku)) parts.push(String(s.sku));
+  return parts.join(' — ');
+};
+
 const asStr = (v) => (v === null || v === undefined) ? '' : String(v);
 const toInt = (v) => {
   const n = parseInt(String(v ?? '').trim(), 10);
@@ -426,7 +444,7 @@ export default function ProductManagement() {
 
     const trimmedPrice = asStr(form.price).trim();
     const priceInt = Number.parseInt(trimmedPrice, 10);
-    if (!Number.isInteger(priceInt) || priceInt < 0 || asStr(priceInt) !== trimmedPrice.replace(/^0+(?=\d)/, '')) {
+    if (!Number.isInteger(priceInt) || priceInt < 0 || asStr(priceInt) !== trimmedPrice.replace(/^0+(?=\\d)/, '')) {
       push('ราคา ต้องเป็น “จำนวนเต็มไม่ติดลบ” เท่านั้น', 'danger');
       return;
     }
@@ -714,13 +732,11 @@ export default function ProductManagement() {
   };
 
   const openVariantsPanel = async () => {
-    if (!isEditing || !editProductId) {
-      push('กรุณา “แก้ไขสินค้า” หรือบันทึกสินค้าให้ได้รหัสก่อน', 'warn');
-      return;
-    }
     const willOpen = !variantsOpen;
     setVariantsOpen(willOpen);
-    if (willOpen) await loadExistingVariants(editProductId);
+    if (willOpen && editProductId) {
+      await loadExistingVariants(editProductId);
+    }
   };
 
   /* ---------- สถานะสินค้า (อ้างอิงจากสต็อก) ---------- */
@@ -743,14 +759,16 @@ export default function ProductManagement() {
         const arr = res?.data?.items || res?.data?.rows || res?.data || [];
         if (Array.isArray(arr)) {
           const mapped = arr.map(v => ({
-            sku: v.sku || '',
-            option_text: [
-              v.option1_value ?? v.opt1 ?? v.color ?? null,
-              v.option2_value ?? v.opt2 ?? v.size ?? null,
-              v.option3_value ?? v.opt3 ?? v.material ?? null
-            ].filter(Boolean).join(' / ')
-          }));
-          setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
+          sku: v.sku || '',
+          option_text: [
+            v.option1_value ?? v.opt1 ?? v.color ?? null,
+            v.option2_value ?? v.opt2 ?? v.size ?? null,
+            v.option3_value ?? v.opt3 ?? v.material ?? null
+          ].filter(Boolean).join(' / '),
+          price: Number(v.price ?? v.selling_price ?? v.variant_price ?? v.base_price ?? 0),
+          stock: Number(v.stock_qty ?? v.stock ?? v.qty ?? v.quantity ?? 0)
+        }));
+setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
           return;
         }
       } catch { /* try next */ }
@@ -949,8 +967,6 @@ export default function ProductManagement() {
               type="button"
               className="btn btn-primary btn-lg"
               onClick={openVariantsPanel}
-              disabled={!isEditing || !editProductId}
-              title={!isEditing ? 'ต้องแก้ไขสินค้าก่อน' : undefined}
             >
               ➕ ตัวเลือกสินค้า (สี / ขนาด / วัสดุ)
             </button>
@@ -1216,13 +1232,18 @@ export default function ProductManagement() {
                         {p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}
                       </span>
                       {/* ⬇️ แสดงลูก SKU ใต้ชื่อสินค้า */}
-                      <div className="subtext" style={{marginTop:4, color:'#667085', fontSize:12}}>
-                        {skus
-                          ? (skus.length
-                              ? <>SKU ลูก: {skus.map(s => s.sku || '(ไม่ระบุ)').filter(Boolean).join(', ')}</>
-                              : 'SKU ลูก: — ไม่มี —')
-                          : 'SKU ลูก: กำลังโหลด…'}
-                      </div>
+                      <div className="subtext">
+  {skus
+    ? (skus.length ? (
+        <ol className="sku-list">{(skus || []).map((s, idx) => formatSkuLine(s)).filter(Boolean).length
+  ? (skus || []).map((s, idx) => {
+      const line = formatSkuLine(s);
+      return line ? <li key={idx}><span style={{fontWeight:600}}>{idx + 1}.</span> {line}</li> : null;
+    })
+  : null}</ol>
+      ) : 'SKU ลูก: — ไม่มี —')
+    : 'SKU ลูก: กำลังโหลด…'}
+</div>
                     </td>
                     <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
                     <td><span className={stockClass}>{stock}</span></td>
@@ -1278,13 +1299,18 @@ export default function ProductManagement() {
                           <td>
                             <span className={`pill ${published ? 'on' : 'off'}`}>{published ? 'กำลังแสดง' : 'ถูกซ่อน'}</span>
                             <span className="name-with-badges"><strong className="product-name">{p.product_name}</strong>{p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}</span>
-                            <div className="subtext" style={{marginTop:4, color:'#667085', fontSize:12}}>
-                              {skus
-                                ? (skus.length
-                                    ? <>SKU ลูก: {skus.map(s => s.sku || '(ไม่ระบุ)').filter(Boolean).join(', ')}</>
-                                    : 'SKU ลูก: — ไม่มี —')
-                                : 'SKU ลูก: กำลังโหลด…'}
-                            </div>
+                            <div className="subtext">
+  {skus
+    ? (skus.length ? (
+        <ol className="sku-list">{(skus || []).map((s, idx) => formatSkuLine(s)).filter(Boolean).length
+  ? (skus || []).map((s, idx) => {
+      const line = formatSkuLine(s);
+      return line ? <li key={idx}><span style={{fontWeight:600}}>{idx + 1}.</span> {line}</li> : null;
+    })
+  : null}</ol>
+      ) : 'SKU ลูก: — ไม่มี —')
+    : 'SKU ลูก: กำลังโหลด…'}
+</div>
                           </td>
                           <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
                           <td><span className={stockClass}>{stock}</span></td>

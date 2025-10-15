@@ -1,6 +1,5 @@
 // src/pages/HomeUser.js
-// ✅ รองรับ {items,total} และ array ตรง ๆ
-// ✅ ขอจำนวนมากขึ้น (products 100+, best-sellers 12) แต่แสดงตามดีไซน์เดิม
+// รองรับ {items,total} และ array ตรง ๆ + ขอจำนวนมากขึ้น
 
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -13,12 +12,8 @@ const apiPath = (p) =>
 
 const backendOrigin = (() => {
   const base = axios.defaults.baseURL || 'http://localhost:3001/api';
-  try {
-    const u = new URL(base);
-    return u.origin + (u.pathname.replace(/\/api\/?$/, '') || '');
-  } catch {
-    return 'http://localhost:3001';
-  }
+  try { const u = new URL(base); return u.origin + (u.pathname.replace(/\/api\/?$/, '') || ''); }
+  catch { return 'http://localhost:3001'; }
 })();
 const absUrl = (u) => {
   if (!u) return '';
@@ -33,7 +28,6 @@ const toArray = (d) =>
   Array.isArray(d?.data?.items) ? d.data.items :
   Array.isArray(d?.data) ? d.data : [];
 
-// ---- normalize ----
 const normalizeProduct = (p, idx) => {
   const img = p.image_url || p.cover_url || p.image || (Array.isArray(p.images) ? p.images[0] : '');
   return {
@@ -73,7 +67,6 @@ export default function HomeUser() {
   const [loading, setLoading]         = useState({ cat: true, best: true, all: true });
   const [err, setErr]                 = useState({ cat: '', best: '', all: '' });
 
-  // categories
   useEffect(() => {
     (async () => {
       try {
@@ -92,7 +85,6 @@ export default function HomeUser() {
     })();
   }, []);
 
-  // best sellers (ขอ 12 แต่โชว์ 5 ตามดีไซน์เดิม)
   useEffect(() => {
     (async () => {
       try {
@@ -105,12 +97,11 @@ export default function HomeUser() {
         ];
         let bag = [];
         for (const ep of endpoints) {
-          const got = await fetchWithCount(ep, 12); // ⭐ ขอ 12
+          const got = await fetchWithCount(ep, 12); // ขอ 12
           if (got.length) bag = bag.concat(got);
           if (bag.length >= 12) break;
         }
-        const list = bag.map((p, i) => normalizeProduct(p, i))
-                        .filter(x => x.id && x.name);
+        const list = bag.map((p, i) => normalizeProduct(p, i)).filter(x => x.id && x.name);
         setBestSellers(list.slice(0, 5)); // แสดง 5
         if (!list.length) setErr(e => ({ ...e, best: 'ยังไม่มีรายการขายดีหรือ API ไม่ส่งข้อมูล' }));
       } catch {
@@ -119,16 +110,14 @@ export default function HomeUser() {
     })();
   }, []);
 
-  // all products (ขอเยอะขึ้น 100)
   useEffect(() => {
     (async () => {
       try {
         setLoading(s => ({ ...s, all: true }));
-        const got = await fetchWithCount(apiPath('/products'), 100); // ⭐ ขอ 100 (route default 60)
+        const got = await fetchWithCount(apiPath('/products'), 100); // ขอ 100 (route default 60)
         const seen = new Set();
-        const list = got
-          .map((p, i) => normalizeProduct(p, i))
-          .filter(x => x.id && x.name && !seen.has(x.id) && seen.add(x.id));
+        const list = got.map((p, i) => normalizeProduct(p, i))
+                        .filter(x => x.id && x.name && !seen.has(x.id) && seen.add(x.id));
         list.sort((a, b) => {
           const ai = Number(a.id), bi = Number(b.id);
           if (Number.isFinite(ai) && Number.isFinite(bi)) return bi - ai;
@@ -144,7 +133,7 @@ export default function HomeUser() {
 
   return (
     <div className="home-container">
-      {/* …ส่วนหัว/เฮียโร่/หมวดหมู่เหมือนเดิม… */}
+      {/* hero & categories … (คงเดิมของโปรเจ็กต์คุณ) */}
 
       <section className="best-sellers">
         <h2>🌟 สินค้าขายดี</h2>

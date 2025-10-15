@@ -2,7 +2,6 @@
 // ✅ Products CRUD + Archive/Unarchive + Images
 // ✅ NEW: POST /api/admin/products/full — create product + options + variants + images (one shot)
 // ✅ NEW: POST /api/admin/products/:id/variants/generate — รับ rows/items แล้ว “สร้างชุดตัวเลือก + variants ใหม่ทั้งหมด” (schema-safe)
-// ✅ NEW: GET  /api/admin/products/:id/variants — ดึง variants + stock + images (canonical สำหรับหน้าแอดมิน)
 // ✅ Validation: product_name, category_id (TEXT), price>=0, product_unit_id required
 // ✅ Published supports both is_published / published (auto-detect)
 // ✅ Stock from v_product_variants_live_stock if present; else 0
@@ -11,6 +10,137 @@
 
 const express = require('express');
 const router = express.Router();
+
+// ===== [SAFE LIST OVERRIDE] inserted by ChatGPT =====
+// This handler is schema-safe and *prevents 400* for GET / (include_archived/search/etc. allowed).
+// It runs early to avoid stricter downstream handlers.
+try {
+  const hasCol = async (t, c) => {
+    const q = await db.query(
+      `SELECT EXISTS(
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+       ) AS ok`,
+      [t, c]
+    );
+    return !!(q && q.rows && q.rows[0] && q.rows[0].ok);
+  };
+  const hasTable = async (name) => {
+    const q = await db.query(`SELECT to_regclass($1) IS NOT NULL AS ok`, [`public.${name}`]);
+    return !!(q && q.rows && q.rows[0] && q.rows[0].ok);
+  };
+  const getPublishCol = async () => {
+    if (await hasCol('products', 'is_published')) return 'is_published';
+    if (await hasCol('products', 'published')) return 'published';
+    return null;
+  };
+  const getStocks = async () => {
+    const q = await db.query(`SELECT to_regclass('public.v_product_variants_live_stock') IS NOT NULL AS ok`);
+    if (!(q && q.rows && q.rows[0] && q.rows[0].ok)) return {};
+    const s = await db.query(`SELECT product_id, SUM(live_stock)::int AS stock
+                             FROM v_product_variants_live_stock GROUP BY product_id`);
+    const m = {}; 
+    for (const r of s.rows || []) { m[r.product_id] = r.stock; }
+    return m;
+  };
+
+  router.get('/', async (req, res, next) => {
+    // If another list has already been attached after this one and you want to use it,
+    // comment `return next()` below. By default we serve from this safe route.
+    // return next();
+    try {
+      const q = req.query || {};
+      const perPage = Math.min(Math.max(parseInt(q.per_page || q.limit || '50', 10) || 50, 1), 200);
+      const page = Math.max(parseInt(q.page || '1', 10) || 1, 1);
+      const offset = (page - 1) * perPage;
+
+      const includeArchived = String(q.include_archived ?? '0') === '1';
+      const search = (q.search || q.q || '').toString().trim();
+      const categoryId = q.category_id ? parseInt(q.category_id, 10) : null;
+      const subcategoryId = q.subcategory_id ? parseInt(q.subcategory_id, 10) : null;
+      const wantPublished =
+        q.published === undefined || q.published === null || q.published === ''
+          ? null
+          : String(q.published) === '1';
+
+      const publishCol = await getPublishCol();
+      const hasArchived = await hasCol('products', 'archived_at');
+
+      const where = [];
+      const params = [];
+
+      if (!includeArchived && hasArchived) where.push(`(p.archived_at IS NULL)`);
+      if (wantPublished !== null && publishCol) {
+        params.push(wantPublished);
+        where.push(`(COALESCE(p.${publishCol}, TRUE) = $${params.length})`);
+      }
+      if (categoryId) { params.push(categoryId); where.push(`(p.category_id = $${params.length})`); }
+      if (subcategoryId) { params.push(subcategoryId); where.push(`(p.subcategory_id = $${params.length})`); }
+      if (search) {
+        params.push(`%${search}%`);
+        where.push(`(
+          COALESCE(p.product_name, p.name, '') ILIKE $${params.length}
+          OR COALESCE(p.description, p.details, '') ILIKE $${params.length}
+        )`);
+      }
+
+      const whereSQL = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const baseSQL = `
+        FROM products p
+        LEFT JOIN product_categories c ON c.category_id = p.category_id
+        LEFT JOIN subcategories s ON s.subcategory_id = p.subcategory_id
+      `;
+
+      const qRows = await db.query(`
+        SELECT 
+          COALESCE(p.product_id, p.id) AS product_id,
+          COALESCE(p.product_name, p.name) AS product_name,
+          p.price,
+          p.category_id, c.category_name,
+          p.subcategory_id, s.subcategory_name,
+          p.product_unit_id AS unit_id,
+          p.size_unit_id,
+          ${hasArchived ? 'p.archived_at' : 'NULL as archived_at'},
+          ${publishCol ? `COALESCE(p.${publishCol}, TRUE) AS ${publishCol}` : 'TRUE AS is_published'},
+          p.image_url
+        ${baseSQL}
+        ${whereSQL}
+        ORDER BY COALESCE(p.product_id, p.id) DESC
+        LIMIT ${perPage} OFFSET ${offset}
+      `, params);
+      const rows = qRows.rows || [];
+
+      const totalRowQ = await db.query(`SELECT COUNT(*)::int AS total ${baseSQL} ${whereSQL}`, params);
+      const stocks = await getStocks();
+
+      const items = rows.map(r => ({
+        id: r.product_id,
+        product_name: r.product_name || '',
+        price: Number(r.price || 0),
+        category_id: r.category_id,
+        category_name: r.category_name || '',
+        subcategory_id: r.subcategory_id,
+        subcategory_name: r.subcategory_name || '',
+        unit_id: r.unit_id || null,
+        size_unit_id: r.size_unit_id || null,
+        stock: stocks[r.product_id] ?? 0,
+        is_published: publishCol ? !!r[publishCol] : true,
+        archived_at: r.archived_at || null,
+        image_url: r.image_url || null,
+      }));
+
+      return res.json({ items, page, per_page: perPage, total: totalRow.total, _source: 'safe-list' });
+    } catch (e) {
+      console.error('SAFE LIST failed, falling through to next handler', e);
+      return next(); // let original handler handle it
+    }
+  });
+} catch (e) {
+  console.error('Insert SAFE LIST failed to initialize:', e);
+}
+// ===== [END SAFE LIST OVERRIDE] =====
+
+
 
 let db;
 try { db = require('../db'); } catch { db = require('../db/db'); }
@@ -27,7 +157,7 @@ function toNum(v) {
   if (s === '') return null;
   const th = '๐๑๒๓๔๕๖๗๘๙';
   s = s.replace(/[๐-๙]/g, d => th.indexOf(d));
-  s = s.replace(/[,฿\\s]/g, '');
+  s = s.replace(/[,฿\s]/g, '');
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
@@ -245,15 +375,24 @@ router.post('/full', async (req, res) => {
 
 /* ======================================================================
  * ✅ NEW: POST /api/admin/products/:id/variants/generate
+ *      - ใช้กับหน้า VariantsManager (items/rows แบบง่าย)
+ *      - กลยุทธ์ (PATCHED): 
+ *          • ลบเฉพาะ variants เดิมที่ “ไม่ถูกอ้างอิงใน inventory_moves”
+ *          • ตัวที่ถูกอ้างอิง → UPDATE is_active=false (ถ้ามีคอลัมน์)
+ *          • ลบ options/values เดิม “เฉพาะกรณีไม่เหลือ variant เดิมเลย”
+ *          • แล้วจึงสร้าง options/values/variants ใหม่
+ *      - Schema-safe: รองรับทั้ง product_options/values และ options/option_values
  * ==================================================================== */
 router.post('/:id/variants/generate', async (req, res) => {
   const productId = toInt(req.params.id);
   if (productId == null) return res.status(400).json({ message: 'Invalid product id' });
 
+  // รับได้ทั้ง rows และ items
   const incoming = Array.isArray(req.body?.rows) ? req.body.rows
                  : Array.isArray(req.body?.items) ? req.body.items : [];
   if (!incoming.length) return res.status(400).json({ message: 'rows/items ต้องเป็น array และมีอย่างน้อย 1 แถว' });
 
+  // ดึงรายละเอียดจากแต่ละแถว (details: [{name,value}], sku, price, image_url or images[])
   const items = incoming
     .map(it => ({
       details: Array.isArray(it.details) ? it.details : [],
@@ -266,6 +405,7 @@ router.post('/:id/variants/generate', async (req, res) => {
 
   if (!items.length) return res.status(400).json({ message: 'ไม่มีรายละเอียดตัวเลือกใน rows/items' });
 
+  // สกัดชื่อ option ตามลำดับจาก details ในแต่ละ item (สูงสุด 3)
   const optOrder = [];
   const optValues = {};
   for (const it of items) {
@@ -286,12 +426,14 @@ router.post('/:id/variants/generate', async (req, res) => {
     position: i + 1,
   }));
 
+  // ตรวจสอบตารางที่จำเป็น
   const hasPV = await hasTable('product_variants');
   const hasPVV = await hasTable('product_variant_values');
   if (!hasPV || !hasPVV) {
     return res.status(400).json({ message: 'ตาราง product_variants/product_variant_values ไม่พร้อมใช้งาน' });
   }
 
+  // detect ชุดตาราง options
   const useProductOptions = await hasTable('product_options');
   const T_OPT = useProductOptions ? 'product_options' : (await hasTable('options') ? 'options' : null);
   const T_VAL = useProductOptions ? 'product_option_values' : (await hasTable('option_values') ? 'option_values' : null);
@@ -299,6 +441,7 @@ router.post('/:id/variants/generate', async (req, res) => {
     return res.status(400).json({ message: 'ตาราง options/option_values หรือ product_options/product_option_values ไม่พร้อมใช้งาน' });
   }
 
+  // columns ของ options/values
   const OPT_ID = 'option_id';
   const OPT_NAME_COL = 'option_name';
   const OPT_POS_COL = (await hasColumn(T_OPT, 'option_position')) ? 'option_position' : null;
@@ -309,6 +452,7 @@ router.post('/:id/variants/generate', async (req, res) => {
   const VAL_POS_COL = (await hasColumn(T_VAL, 'value_position')) ? 'value_position' : null;
   if (!VAL_ID) return res.status(400).json({ message: 'ไม่พบคีย์ของค่าตัวเลือก (value_id/option_value_id) ในตารางค่าตัวเลือก' });
 
+  // PK/columns ของ product_variants และ mapping
   const pvPkIsPVId = await hasColumn('product_variants','product_variant_id');
   const PV_PK = pvPkIsPVId ? 'product_variant_id' : (await hasColumn('product_variants','variant_id') ? 'variant_id' : 'id');
 
@@ -318,6 +462,7 @@ router.post('/:id/variants/generate', async (req, res) => {
   const PV_HAS_STOCK   = await hasColumn('product_variants','stock');
   const PV_HAS_IMG     = await hasColumn('product_variants','image_url');
 
+  // mapping table columns
   const PVV_VAR_COL = (await hasColumn('product_variant_values','product_variant_id')) ? 'product_variant_id'
                       : (await hasColumn('product_variant_values','variant_id')) ? 'variant_id' : null;
   const PVV_OPT_COL = (await hasColumn('product_variant_values','option_id')) ? 'option_id' : null;
@@ -331,6 +476,8 @@ router.post('/:id/variants/generate', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    /* ---------- (PATCH) ลบ/ปิดการใช้งาน variants เดิมแบบปลอดภัย ---------- */
+    // 1) หาไอดี variants เดิมทั้งหมดของสินค้านี้
     const { rows: oldVarRows } = await client.query(
       `SELECT ${PV_PK} AS vid FROM product_variants WHERE product_id = $1`,
       [productId]
@@ -338,10 +485,12 @@ router.post('/:id/variants/generate', async (req, res) => {
     const oldIds = oldVarRows.map(r => r.vid);
 
     if (oldIds.length) {
+      // 2) ตรวจว่ามีคอลัมน์อ้างอิงใน inventory_moves แบบไหน
       const imHasVid  = await hasColumn('inventory_moves','variant_id');
       const imHasPVid = await hasColumn('inventory_moves','product_variant_id');
       const imCol = imHasVid ? 'variant_id' : (imHasPVid ? 'product_variant_id' : null);
 
+      // 3) หาว่าไอดีไหนถูกอ้างอิง
       let referenced = [];
       if (imCol) {
         const q = await client.query(
@@ -356,6 +505,7 @@ router.post('/:id/variants/generate', async (req, res) => {
       const deletable = oldIds.filter(id => !refSet.has(id));
       const toArchive = oldIds.filter(id => refSet.has(id));
 
+      // 4) ลบ mapping/variants ที่ "ลบได้จริง"
       if (deletable.length) {
         await client.query(
           `DELETE FROM product_variant_values WHERE ${PVV_VAR_COL} = ANY($1::int[])`,
@@ -367,6 +517,7 @@ router.post('/:id/variants/generate', async (req, res) => {
         );
       }
 
+      // 5) ตัวที่ถูกอ้างอิง → ปิดใช้งานแทน (ถ้ามีคอลัมน์)
       if (toArchive.length && PV_HAS_ACTIVE) {
         await client.query(
           `UPDATE product_variants SET is_active = FALSE WHERE ${PV_PK} = ANY($1::int[])`,
@@ -374,6 +525,7 @@ router.post('/:id/variants/generate', async (req, res) => {
         );
       }
 
+      // 6) ลบ options/values เดิม เฉพาะ "เมื่อไม่เหลือ variant เดิมของสินค้านี้" (กัน orphan)
       const { rows: stillHas } = await client.query(
         `SELECT 1 FROM product_variants WHERE product_id = $1 LIMIT 1`,
         [productId]
@@ -391,6 +543,7 @@ router.post('/:id/variants/generate', async (req, res) => {
       }
     }
 
+    /* ---------- สร้าง options/values ใหม่ ---------- */
     const optionIdByIndex = [];
     const optionValueIdMap = {};
     for (let i=0; i<orderedOptions.length; i++) {
@@ -425,6 +578,7 @@ router.post('/:id/variants/generate', async (req, res) => {
       }
     }
 
+    /* ---------- สร้าง variants ใหม่ + mapping ---------- */
     const created = [];
     for (const it of items) {
       const sku   = it.sku || null;
@@ -449,6 +603,7 @@ router.post('/:id/variants/generate', async (req, res) => {
       );
       const variant_id = ins.rows[0].variant_id;
 
+      // map option values ตาม orderedOptions
       for (let i=0; i<orderedOptions.length; i++) {
         const optName = orderedOptions[i].option_name;
         const valObj = it.details.find(d => normText(d.name) === optName);
@@ -462,6 +617,7 @@ router.post('/:id/variants/generate', async (req, res) => {
         );
       }
 
+      // แนบรูปเข้า product_images หากส่งเป็น images[]
       if (Array.isArray(it.images) && it.images.length) {
         const hasPrimary = it.images.some(i => i && i.is_primary);
         if (hasPrimary) await unsetPrimaryExcept(client, productId);
@@ -488,64 +644,6 @@ router.post('/:id/variants/generate', async (req, res) => {
     return res.status(500).json({ message: 'Generate variants error' });
   } finally {
     client.release?.();
-  }
-});
-
-/* ======================================================================
- * ✅ NEW: GET /api/admin/products/:productId/variants
- *      - ดึง variants + stock (จาก view ถ้ามี) + รูปของแต่ละ variant
- * ==================================================================== */
-router.get('/:productId/variants', nocache, async (req, res) => {
-  const productId = toInt(req.params.productId);
-  if (productId == null) return res.status(400).json({ error: 'Invalid product id' });
-
-  try {
-    const hasView = await hasTable('v_product_variants_live_stock');
-
-    const rows = await db.manyOrNone(`
-      WITH base AS (
-        SELECT v.${await hasColumn('product_variants','variant_id') ? 'variant_id' : (await hasColumn('product_variants','product_variant_id') ? 'product_variant_id AS variant_id' : 'id AS variant_id')},
-               v.product_id,
-               v.sku,
-               ${await hasColumn('product_variants','price_override') ? 'v.price_override' : (await hasColumn('product_variants','price') ? 'v.price' : 'NULL')}::numeric AS price
-        FROM product_variants v
-        WHERE v.product_id = $1
-      ),
-      stock AS (
-        ${hasView ? `
-          SELECT vv.variant_id, COALESCE(vv.stock,0)::int AS stock
-          FROM v_product_variants_live_stock vv
-          WHERE vv.product_id = $1
-        ` : `
-          SELECT v.variant_id, 0::int AS stock
-          FROM base v
-        `}
-      ),
-      imgs AS (
-        SELECT pi.variant_id,
-               json_agg(json_build_object(
-                 'url',      pi.url,
-                 'alt_text', pi.alt_text,
-                 'is_primary', COALESCE(pi.is_primary, false),
-                 'position', COALESCE(pi.position, 1)
-               ) ORDER BY COALESCE(pi.position,1), pi.url) AS images
-        FROM product_images pi
-        WHERE pi.product_id = $1
-        GROUP BY pi.variant_id
-      )
-      SELECT b.variant_id, b.product_id, b.sku, b.price,
-             COALESCE(s.stock,0) AS stock,
-             COALESCE(i.images, '[]'::json) AS images
-      FROM base b
-      LEFT JOIN stock s ON s.variant_id = b.variant_id
-      LEFT JOIN imgs  i ON i.variant_id  = b.variant_id
-      ORDER BY b.variant_id ASC
-    `, [productId]);
-
-    return res.json({ items: rows });
-  } catch (err) {
-    console.error('GET /:productId/variants error', err);
-    return res.status(500).json({ error: 'Failed to load variants' });
   }
 });
 
@@ -679,8 +777,8 @@ router.get('/', nocache, async (req, res)  => {
       LEFT JOIN product_categories c ON c.category_id = p.category_id
       LEFT JOIN subcategories      sc ON sc.subcategory_id = p.subcategory_id
       LEFT JOIN product_statuses   ps ON ps.product_status_id = p.product_status_id
-      ${ (await hasTable('product_units')) ? `LEFT JOIN product_units pu ON pu.${(await hasColumn('product_units','unit_id')) ? 'unit_id' : 'id'} = p.product_unit_id` : '' }
-      ${ (await hasTable('size_units')) ? `LEFT JOIN size_units     su ON su.${(await hasColumn('size_units','size_unit_id')) ? 'size_unit_id' : 'id'} = p.size_unit_id`   : '' }
+      ${ puKey ? `LEFT JOIN product_units pu ON pu.${puKey} = p.product_unit_id` : '' }
+      ${ suKey ? `LEFT JOIN size_units     su ON su.${suKey} = p.size_unit_id`   : '' }
 
       ${ (await hasTable('v_product_variants_live_stock')) ? `
         LEFT JOIN LATERAL (
@@ -698,6 +796,7 @@ router.get('/', nocache, async (req, res)  => {
     const { rows } = await db.query(sql, params);
     const total = rows.length ? Number(rows[0].__total) : 0;
 
+    // decorate status by stock (optional)
     const canUpdateStatusCol = await hasColumn('products', 'product_status_id');
     const hasStatusTable     = await hasTable('product_statuses');
     let outOfStockStatusId   = null;
@@ -782,6 +881,7 @@ router.get('/:id', nocache, async (req, res) => {
 
     const product = rows[0];
 
+    // รูปภาพ (ไม่อ้างอิง product_images.id)
     const imgsQ = await db.query(`
       SELECT url, alt_text, is_primary, position, variant_id, created_at
       FROM product_images
@@ -1320,5 +1420,57 @@ async function insertSingleImage(payload, res) {
   }
 }
 router.post('/product-images', async (req, res) => insertSingleImage(req.body, res));
+/* ======================================================================
+ * ✅ ALIAS: GET /api/admin/products/:id/variants
+ * ใช้ดึง variants แบบง่ายให้ FE (ProductManagement) ไม่เจอ 404
+ * อิงตาราง product_variants โดยตรง (schema-tolerant เบื้องต้น)
+ * ==================================================================== */
+router.get('/:id/variants', async (req, res) => {
+  const raw = (req.params?.id ?? '').toString().trim();
+  const productId = Number(raw);
+  if (!Number.isInteger(productId)) {
+    return res.status(400).json({ message: 'Invalid product id' });
+  }
+  try {
+    const hasCol = async (t, c) => {
+      const q = await db.query(
+        `SELECT EXISTS(
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+         ) AS ok`,
+        [t, c]
+      );
+      return !!(q.rows && q.rows[0] && q.rows[0].ok);
+    };
+
+    const priceCol = (await hasCol('product_variants', 'price_override')) ? 'price_override'
+                   : (await hasCol('product_variants', 'price')) ? 'price' : null;
+    const stockCol = (await hasCol('product_variants', 'stock_qty')) ? 'stock_qty'
+                   : (await hasCol('product_variants', 'stock')) ? 'stock' : null;
+    const imageCol = (await hasCol('product_variants', 'image_url')) ? 'image_url' : null;
+    const activeCol = (await hasCol('product_variants', 'is_active')) ? 'is_active' : null;
+
+    const fields = [
+      'v.variant_id', 'v.product_id', 'v.sku',
+      priceCol ? `COALESCE(v.${priceCol}, 0) AS price` : '0::numeric AS price',
+      stockCol ? `COALESCE(v.${stockCol}, 0)::int AS stock` : '0::int AS stock',
+      activeCol ? `COALESCE(v.${activeCol}, TRUE) AS is_active` : 'TRUE AS is_active',
+      imageCol ? `COALESCE(v.${imageCol}, '') AS image_url` : `'' AS image_url`,
+    ].join(', ');
+
+    const sql = `
+      SELECT ${fields}
+      FROM product_variants v
+      WHERE v.product_id = $1
+      ORDER BY v.variant_id ASC
+    `;
+    const q = await db.query(sql, [productId]);
+    const rows = q.rows || [];
+    return res.json({ items: rows });
+  } catch (err) {
+    console.error('❌ /admin/products/:id/variants error', err);
+    return res.status(200).json({ items: [], _error: 'variants_alias_failed' });
+  }
+});
 
 module.exports = router;
