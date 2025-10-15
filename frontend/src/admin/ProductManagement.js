@@ -2,12 +2,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import './ProductManagement.css';
-import { api, path } from '../lib/api';
+import { api, path, mediaSrc } from '../lib/api'; // ⬅️ เพิ่ม mediaSrc เพื่อแสดงรูปให้ถูกต้องแม้เซิร์ฟเวอร์คืน path แบบ relative
 import { useLookups } from '../lib/lookups';
 
 /* ---------- Helpers ---------- */
 const asStr = (v) => (v === null || v === undefined) ? '' : String(v);
-const pickStatusName = (x) => x?.status_name ?? x?.StatusName ?? x?.name ?? '';
 const toInt = (v) => {
   const n = parseInt(String(v ?? '').trim(), 10);
   return Number.isFinite(n) ? n : null;
@@ -32,7 +31,6 @@ function useToasts() {
 
 export default function ProductManagement() {
   const [products, setProducts] = useState([]);
-  const [statuses, setStatuses] = useState([]);
   const [loading, setLoading] = useState(false);
 
   /* ---------- filters/ui states ---------- */
@@ -57,7 +55,7 @@ export default function ProductManagement() {
   const [isEditing, setIsEditing] = useState(false);
   const [editProductId, setEditProductId] = useState(null);
 
-  // ✅ ฟอร์มใช้ price (จำนวนเต็ม)
+  // ✅ ฟอร์ม (ตัด product_status_id ออก)
   const [form, setForm] = useState({
     product_name: '',
     description: '',
@@ -67,22 +65,25 @@ export default function ProductManagement() {
     product_unit_id: null,
     size_value: '',
     size_unit_id: null,
-    origin: '',
-    product_status_id: ''
+    origin: ''
   });
 
-  // ★ VARIANTS QUICK MODE — state
-  const [quickVar, setQuickVar] = useState({
-    enabled: false,
-    // option names + values (สูงสุด 3)
-    opt1Name: 'สี', opt1Value: '',
-    opt2Name: 'ขนาด', opt2Value: '',
-    opt3Name: '', opt3Value: '',
-    sku: '',
-    price: '',   // ถ้าใส่ จะ override ราคาระดับ variant (ไม่ใส่ = ใช้ราคาสินค้า)
-    stock: '',   // จำนวนคงเหลือเริ่มต้นของ variant เดียว
-    is_active: true
-  });
+  /* ---------- Variants Panel (Full Mode) ---------- */
+  const [variantsOpen, setVariantsOpen] = useState(false);
+
+  // ชื่อตัวเลือก 1–3
+  const [opt1Name, setOpt1Name] = useState('สี');
+  const [opt2Name, setOpt2Name] = useState('ขนาด');
+  const [opt3Name, setOpt3Name] = useState('');
+
+  // ค่าของตัวเลือก (chips)
+  const [opt1Values, setOpt1Values] = useState([]);
+  const [opt2Values, setOpt2Values] = useState([]);
+  const [opt3Values, setOpt3Values] = useState([]);
+
+  // ตารางคอมโบ (แถวของ Variant)
+  // แต่ละแถว: { opt1, opt2, opt3, price, sku, stock, images:[{url,image_id,is_primary,position}], variant_id? }
+  const [variantRows, setVariantRows] = useState([]);
 
   // ✨ refs
   const catRef = useRef(null);
@@ -106,13 +107,12 @@ export default function ProductManagement() {
       });
       let items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
 
-      // ✅ ผูกสถานะจาก stock เพื่อแสดงผล
+      // ✅ ผูกสถานะจาก stock เพื่อแสดงผล (แทนการใช้ตารางสถานะ)
       items = (items || []).map(p => {
         const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
         if (stock <= 0) {
           return { ...p, product_status_name: 'สินค้าหมด' };
         } else if (stock <= 5) {
-          console.warn(`⚠️ สินค้าใกล้หมด: ${p.product_name} (เหลือ ${stock})`);
           return { ...p, product_status_name: 'สต็อกใกล้หมด' };
         } else {
           return { ...p, product_status_name: 'พร้อมจำหน่าย' };
@@ -125,24 +125,7 @@ export default function ProductManagement() {
     }
   }, [showArchived]);
 
-  const fetchStatuses = useCallback(async () => {
-    try {
-      let res = await api.get(path('/product-status'));
-      if (!Array.isArray(res.data)) {
-        try { res = await api.get(path('/product-statuses')); } catch {}
-      }
-      const normalized = (res.data || []).map((x) => ({
-        id: asStr(x?.product_status_id ?? x?.ProductStatusID ?? x?.id),
-        name: pickStatusName(x)
-      }));
-      setStatuses(normalized);
-    } catch {
-      console.warn('⚠ ไม่มี endpoint product-status | product-statuses');
-      setStatuses([]);
-    }
-  }, []);
-
-  /* ---------- Upload ---------- */
+  /* ---------- Upload (product main) ---------- */
   async function uploadImage(file) {
     if (!file) return null;
     const sendWith = async (field) => {
@@ -163,6 +146,43 @@ export default function ProductManagement() {
         }
       }
       throw e1;
+    }
+  }
+
+  /* ---------- Upload (per-variant image) — แก้ให้แสดงพรีวิวทันที + รองรับ path relative ---------- */
+  async function uploadVariantImage(file) {
+    if (!file) return null;
+
+    const trySend = async (endpoint, fieldNames = ['file', 'image', 'photo']) => {
+      let lastErr;
+      for (const field of fieldNames) {
+        try {
+          const fd = new FormData();
+          fd.append(field, file);
+          const res = await api.post(path(endpoint), fd, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          const url =
+            res?.data?.url ||
+            res?.data?.imageUrl ||
+            res?.data?.path ||
+            res?.data?.location ||
+            res?.data?.data?.url ||
+            null;
+          const image_id = res?.data?.image_id ?? res?.data?.id ?? null;
+          if (url) return { url, image_id };
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error('UPLOAD_FAIL');
+    };
+
+    try {
+      return await trySend('/product-images/upload', ['file']);
+    } catch {
+      const up = await trySend('/upload', ['file', 'image', 'photo']);
+      return { url: up.url, image_id: up.image_id ?? null };
     }
   }
 
@@ -212,10 +232,10 @@ export default function ProductManagement() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchProducts(), fetchStatuses(), reloadLookups()]);
+      await Promise.all([fetchProducts(), reloadLookups()]);
       setLoading(false);
     })();
-  }, [fetchProducts, fetchStatuses, reloadLookups, showArchived]);
+  }, [fetchProducts, reloadLookups, showArchived]);
 
   /* ---------- form handlers ---------- */
   const onChange = (e) => {
@@ -229,10 +249,6 @@ export default function ProductManagement() {
     if (name === 'subcategory_id') {
       const sid = asStr(value).trim();
       return setForm((p) => ({ ...p, subcategory_id: sid || null }));
-    }
-
-    if (name === 'product_status_id') {
-      return setForm((p) => ({ ...p, product_status_id: asStr(value) }));
     }
 
     if (name === 'product_unit_id' || name === 'size_unit_id') {
@@ -263,7 +279,55 @@ export default function ProductManagement() {
     });
   };
 
-  const onEdit = (p) => {
+  /* ---------- ดึงตัวเลือกเดิมของสินค้า ---------- */
+  const loadExistingVariants = useCallback(async (productId) => {
+    let rows = [];
+    const tryEndpoints = [
+      path(`/admin/products/${productId}/variants`),
+      path(`/products/${productId}/variants`),
+      path(`/api/variants/by-product/${productId}`),
+      path(`/api/variants?product_id=${productId}`)
+    ];
+    for (const url of tryEndpoints) {
+      try {
+        const res = await api.get(url);
+        const arr = res?.data?.items || res?.data?.rows || res?.data || [];
+        if (Array.isArray(arr) && arr.length) {
+          rows = arr;
+          break;
+        }
+      } catch { /* ignore */ }
+    }
+    if (!rows.length) { setVariantRows([]); return; }
+
+    const mapped = rows.map(v => ({
+      variant_id: v.variant_id ?? v.id ?? null,
+      opt1: v.option1_value ?? v.opt1 ?? v.color ?? null,
+      opt2: v.option2_value ?? v.opt2 ?? v.size ?? null,
+      opt3: v.option3_value ?? v.opt3 ?? v.material ?? null,
+      price: v.price ?? '',
+      sku: v.sku ?? '',
+      stock: v.stock ?? v.stock_qty ?? v.quantity ?? '',
+      images: (v.images || []).map((im, i) => ({
+        url: mediaSrc(im.url ?? im.image_url ?? im.path ?? ''), // ⬅️ ห่อด้วย mediaSrc เพื่อแสดงได้แน่นอน
+        image_id: im.image_id ?? im.id ?? null,
+        is_primary: !!im.is_primary || i === 0, position: im.position ?? (i + 1)
+      }))
+    }));
+
+    setVariantRows(mapped);
+
+    if (!opt1Name) setOpt1Name('ตัวเลือก 1');
+    if (!opt2Name && mapped.some(r => r.opt2)) setOpt2Name('ตัวเลือก 2');
+    if (!opt3Name && mapped.some(r => r.opt3)) setOpt3Name('ตัวเลือก 3');
+
+    const uniq = (xs) => Array.from(new Set(xs.filter(Boolean)));
+    setOpt1Values(uniq(mapped.map(r => r.opt1)));
+    setOpt2Values(uniq(mapped.map(r => r.opt2)));
+    setOpt3Values(uniq(mapped.map(r => r.opt3)));
+  }, [opt1Name, opt2Name, opt3Name]);
+
+  const onEdit = async (p) => {
     setForm({
       product_name:        p.product_name ?? '',
       description:         p.description ?? '',
@@ -273,13 +337,16 @@ export default function ProductManagement() {
       product_unit_id:     toInt(p.product_unit_id),
       size_value:          asStr(p.size_value ?? ''),
       size_unit_id:        toInt(p.size_unit_id),
-      origin:              p.origin ?? '',
-      product_status_id:   asStr(p.product_status_id ?? p.ProductStatusID ?? '')
+      origin:              p.origin ?? ''
     });
     setIsEditing(true);
     setEditProductId(p.product_id);
 
-    // ✨ เลื่อนขึ้นฟอร์ม + โฟกัสช่องชื่อสินค้า
+    // ✅ เปิด Panel ตัวเลือกอัตโนมัติ และดึงข้อมูลตัวเลือกเดิมขึ้นมา
+    setVariantsOpen(true);
+    await loadExistingVariants(p.product_id);
+
+    // เลื่อนขึ้นฟอร์ม + โฟกัสชื่อสินค้า
     const scrollToTarget = () => {
       const headerOffset = 80;
       const el = formTopRef.current || nameInputRef.current;
@@ -300,54 +367,20 @@ export default function ProductManagement() {
       product_name: '', description: '', price: '',
       category_id: null, subcategory_id: null,
       product_unit_id: null,
-      size_value: '', size_unit_id: null, origin: '',
-      product_status_id: ''
+      size_value: '', size_unit_id: null, origin: ''
     });
     setSelectedFiles([]);
     setIsEditing(false);
     setEditProductId(null);
 
-    // ★ reset quick variant
-    setQuickVar({
-      enabled: false,
-      opt1Name: 'สี', opt1Value: '',
-      opt2Name: 'ขนาด', opt2Value: '',
-      opt3Name: '', opt3Value: '',
-      sku: '', price: '', stock: '', is_active: true
-    });
+    // reset Variants Panel
+    setVariantsOpen(false);
+    setOpt1Name('สี'); setOpt2Name('ขนาด'); setOpt3Name('');
+    setOpt1Values([]); setOpt2Values([]); setOpt3Values([]);
+    setVariantRows([]);
   };
 
-  // ★ VARIANTS QUICK MODE — helper
-  const buildQuickVariantPayload = (product_id, uploadedUrls) => {
-    const opts = [];
-    const pushOpt = (name, value) => {
-      const n = (name || '').trim();
-      const v = (value || '').trim();
-      if (n && v) opts.push({ name: n, value: v });
-    };
-    pushOpt(quickVar.opt1Name, quickVar.opt1Value);
-    pushOpt(quickVar.opt2Name, quickVar.opt2Value);
-    pushOpt(quickVar.opt3Name, quickVar.opt3Value);
-
-    const vPrice = asStr(quickVar.price).trim();
-    const vStock = asStr(quickVar.stock).trim();
-
-    const images = (uploadedUrls || []).map((url, i) => ({
-      url, is_primary: i === 0, position: i + 1
-    }));
-
-    return {
-      product_id,
-      options: opts,                // [{name,value}, ...]
-      sku: (quickVar.sku || '').trim() || null,
-      price: vPrice !== '' ? Number.parseInt(vPrice, 10) : null,
-      stock: vStock !== '' ? Number.parseInt(vStock, 10) : null,
-      is_active: !!quickVar.is_active,
-      images
-    };
-  };
-
-  /* ---------- Submit ---------- */
+  /* ---------- Submit product (ปุ่มเดียว: “บันทึก”) ---------- */
   const onSubmit = async (e) => {
     e.preventDefault();
 
@@ -364,8 +397,6 @@ export default function ProductManagement() {
       catRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
-
-    const statusText = (asStr(form.product_status_id).trim() || null);
 
     const puId = toInt(form.product_unit_id);
     if (puId == null) { push('กรุณาเลือก “หน่วยสินค้า”', 'warn'); return; }
@@ -389,7 +420,6 @@ export default function ProductManagement() {
       price: priceInt,
       category_id: catIdStr,
       subcategory_id: (asStr(form.subcategory_id || '').trim() || null),
-      product_status_id: statusText,
       product_unit_id: puId,
       size_unit_id: suId,
       size_value: sizeV,
@@ -397,33 +427,31 @@ export default function ProductManagement() {
     };
 
     try {
-      let createdId = editProductId;
+      let productId = editProductId;
       if (isEditing && editProductId) {
         await api.put(path(`/admin/products/${editProductId}`), body);
-        push('✅ อัปเดตสินค้าสำเร็จ', 'ok');
       } else {
         const res = await api.post(path('/admin/products'), body);
-        createdId = res?.data?.product_id ?? res?.data?.id ?? res?.data?.ProductID ?? createdId;
-        push('🎉 เพิ่มสินค้าเรียบร้อย', 'ok');
+        productId = res?.data?.product_id ?? res?.data?.id ?? res?.data?.ProductID ?? productId;
       }
 
-      // บันทึกรูปสินค้าเข้าตารางรูป
-      if (createdId && uploadedUrls.length > 0) {
+      // บันทึกรูปสินค้าเข้าตารางรูป (ถ้ามี)
+      if (productId && uploadedUrls.length > 0) {
         const imagesPayload = uploadedUrls.map((url, i) => ({
           url, alt_text: previews[i]?.name || null, is_primary: i === 0, position: i + 1
         }));
         try {
-          await api.post(path(`/admin/products/${createdId}/images`), { images: imagesPayload });
+          await api.post(path(`/admin/products/${productId}/images`), { images: imagesPayload });
         } catch {
           for (const img of imagesPayload) {
             try {
               try {
                 await api.post(path('/product-images'), {
-                  product_id: createdId, url: img.url, alt_text: img.alt_text, is_primary: img.is_primary, position: img.position
+                  product_id: productId, url: img.url, alt_text: img.alt_text, is_primary: img.is_primary, position: img.position
                 });
               } catch {
                 await api.post(path('/admin/product-images'), {
-                  product_id: createdId, url: img.url, alt_text: img.alt_text, is_primary: img.is_primary, position: img.position
+                  product_id: productId, url: img.url, alt_text: img.alt_text, is_primary: img.is_primary, position: img.position
                 });
               }
             } catch (err) {
@@ -433,37 +461,26 @@ export default function ProductManagement() {
         }
       }
 
-      // ★ VARIANTS QUICK MODE — ถ้าเปิดไว้ ให้สร้าง/อัปเดต Variant เดียวหลังสร้างสินค้า
-      if (!isEditing && createdId && quickVar.enabled) {
-        try {
-          const payload = buildQuickVariantPayload(createdId, uploadedUrls);
-          // ทั้งชื่อ option และ value ต้องมีอย่างน้อย 1 คู่ จึงจะยิง
-          if ((payload.options || []).length > 0) {
-            await api.post(path('/api/variants/upsert-single'), payload);
-            push('🧩 สร้าง Variant สำเร็จ (โหมดเร็ว)', 'ok');
-          } else {
-            push('ℹ️ ไม่ได้สร้าง Variant: กรุณากรอกอย่างน้อย 1 ตัวเลือกและค่า', 'warn');
-          }
-        } catch (err) {
-          handleApiError(err, '❌ สร้าง Variant (โหมดเร็ว) ไม่สำเร็จ');
-        }
-      }
-
       await fetchProducts();
       await reloadLookups();
-      clearForm();
+
+      // ถ้าพึ่งสร้างใหม่ ให้เข้าโหมดแก้ไขทันที + เปิดตัวเลือก
+      if (!isEditing && productId) {
+        const created = (Array.isArray(products) ? products : []).find(p => p.product_id === productId) || { product_id: productId };
+        await onEdit(created);
+        push('🎉 บันทึกสินค้าแล้ว เปิดตัวเลือกให้แก้ไขต่อได้เลย', 'ok');
+        setSelectedFiles([]);
+        setPreviews([]);
+        return;
+      }
+
+      push('✅ บันทึกสำเร็จ', 'ok');
     } catch (err) {
       handleApiError(err, '❌ บันทึกสินค้าไม่สำเร็จ');
     }
   };
 
   /* ---------- options ---------- */
-  const statusOptions = useMemo(() => ([
-    <option key="" value="">— เลือกสถานะ —</option>,
-    ...statuses.map(s => <option key={s.id} value={asStr(s.id)}>{s.name || '(ไม่มีชื่อ)'}</option>)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  ]), [JSON.stringify(statuses)]);
-
   const categoryOptions = useMemo(() => ([
     <option key="" value="">เลือกประเภท</option>,
     ...(lookups.product_categories || []).map(c => (
@@ -575,6 +592,148 @@ export default function ProductManagement() {
     }
     return Array.from(map.entries());
   }, [groupByCategory, paged]);
+
+  /* ---------- สร้างแถวคอมโบใหม่เมื่อค่า chips เปลี่ยน ---------- */
+  useEffect(() => {
+    const v1 = opt1Values.length ? opt1Values : [null];
+    const v2 = opt2Values.length ? opt2Values : [null];
+    const v3 = opt3Values.length ? opt3Values : [null];
+    const combos = [];
+    for (const a of v1) for (const b of v2) for (const c of v3) {
+      combos.push({ opt1: a, opt2: b, opt3: c, price: '', sku: '', stock: '', images: [] });
+    }
+    setVariantRows(combos);
+  }, [opt1Values, opt2Values, opt3Values]);
+
+  const addChip = (list, setList, txt) => {
+    const v = String(txt || '').trim();
+    if (!v) return;
+    if (!list.includes(v)) setList([...list, v]);
+  };
+  const removeChip = (list, setList, idx) => setList(list.filter((_, i) => i !== idx));
+
+  const onUploadRowImage = async (file, rowIdx) => {
+    if (!file) return;
+    // พรีวิวชั่วคราว
+    const tmpUrl = URL.createObjectURL(file);
+    setVariantRows(prev => {
+      const a = [...prev];
+      const imgs = Array.isArray(a[rowIdx].images) ? [...a[rowIdx].images] : [];
+      imgs.push({ url: tmpUrl, image_id: null, is_primary: imgs.length === 0, position: imgs.length + 1, __temp: true });
+      a[rowIdx] = { ...a[rowIdx], images: imgs };
+      return a;
+    });
+    try {
+      const up = await uploadVariantImage(file);
+      setVariantRows(prev => {
+        const a = [...prev];
+        const imgs = [...a[rowIdx].images];
+        const idx = imgs.findIndex(x => x.url === tmpUrl);
+        if (idx >= 0) imgs[idx] = { ...imgs[idx], url: mediaSrc(up.url), image_id: up.image_id ?? imgs[idx].image_id, __temp: false }; // ⬅️ แสดงรูปจริงด้วย mediaSrc
+        a[rowIdx] = { ...a[rowIdx], images: imgs };
+        return a;
+      });
+    } catch (e) {
+      push('❌ อัปโหลดรูปไม่สำเร็จ', 'danger');
+      setVariantRows(prev => {
+        const a = [...prev];
+        a[rowIdx] = { ...a[rowIdx], images: (a[rowIdx].images || []).filter(x => x.url !== tmpUrl) };
+        return a;
+      });
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(tmpUrl), 2000);
+    }
+  };
+
+  const removeRowImage = async (rowIdx, imgIdx) => {
+    const img = variantRows[rowIdx]?.images?.[imgIdx];
+    if (!img) return;
+    if (img.image_id) {
+      try {
+        await api.delete(path(`/product-images/${img.image_id}`));
+        push('🗑️ ลบรูปแล้ว', 'ok');
+      } catch (e) {
+        console.warn('delete image fail', e?.response?.data || e?.message || e);
+      }
+    }
+    setVariantRows(prev => {
+      const a = [...prev];
+      const imgs = (a[rowIdx].images || []).filter((_, i) => i !== imgIdx);
+      const re = imgs.map((x, i) => ({ ...x, position: i + 1, is_primary: i === 0 }));
+      a[rowIdx] = { ...a[rowIdx], images: re };
+      return a;
+    });
+  };
+
+  const autoSku = () => {
+    const base = `P${editProductId || ''}`.replace(/-+$/,'');
+    setVariantRows(prev =>
+      prev.map(r => {
+        const parts = [base, r.opt1, r.opt2, r.opt3].filter(Boolean);
+        const rand = String(Math.floor(Math.random() * 99) + 1).padStart(2, '0');
+        return { ...r, sku: parts.join('-') + '-' + rand };
+      })
+    );
+    push('✨ เติม SKU อัตโนมัติให้ทุกแถวแล้ว', 'ok');
+  };
+
+  const saveAllVariants = async () => {
+    if (!editProductId) {
+      push('กรุณา “บันทึกสินค้า” ให้ได้รหัสก่อน แล้วค่อยบันทึกตัวเลือก', 'warn');
+      return;
+    }
+    const effective = variantRows.filter(r => r.opt1 || r.opt2 || r.opt3);
+    if (effective.length === 0) {
+      push('ยังไม่มีแถวตัวเลือกที่จะบันทึก', 'warn');
+      return;
+    }
+
+    let ok = 0, fail = 0;
+    for (const r of effective) {
+      const payload = {
+        product_id: editProductId,
+        options: [
+          r.opt1 ? { name: opt1Name, value: r.opt1 } : null,
+          r.opt2 ? { name: opt2Name, value: r.opt2 } : null,
+          r.opt3 && opt3Name ? { name: opt3Name, value: r.opt3 } : null,
+        ].filter(Boolean),
+        sku: r.sku || null,
+        price: r.price !== '' ? Number(r.price) : null,
+        stock: r.stock !== '' ? Number(r.stock) : null,
+        images: (r.images || []).map((im, i) => ({
+          url: mediaSrc(im.url), is_primary: i === 0, position: i + 1
+        }))
+      };
+
+      try {
+        await api.post(path('/api/variants/upsert-single'), payload);
+        ok++;
+      } catch (e) {
+        console.error('upsert-single fail', e?.response?.data || e?.message || e);
+        fail++;
+      }
+    }
+
+    if (ok && !fail) push(`✅ บันทึกตัวเลือกทั้งหมดแล้ว (${ok} แถว)`, 'ok');
+    else if (ok && fail) push(`⚠️ บันทึกสำเร็จ ${ok} แถว / ล้มเหลว ${fail} แถว`, 'warn');
+    else push('❌ บันทึกตัวเลือกไม่สำเร็จ', 'danger');
+  };
+
+  const openVariantsPanel = async () => {
+    if (!isEditing || !editProductId) {
+      push('กรุณา “แก้ไขสินค้า” หรือบันทึกสินค้าให้ได้รหัสก่อน', 'warn');
+      return;
+    }
+    const willOpen = !variantsOpen;
+    setVariantsOpen(willOpen);
+    if (willOpen) await loadExistingVariants(editProductId);
+  };
+
+  /* ---------- สถานะสินค้า (อ้างอิงจากสต็อก) ---------- */
+  const currentEditingProduct = useMemo(
+    () => (products || []).find(p => p.product_id === editProductId) || null,
+    [products, editProductId]
+  );
 
   if (loading || lkLoading) return <div style={{ padding: 12 }}>กำลังโหลดข้อมูล…</div>;
   if (lkError) console.warn('⚠ lookups error:', lkError);
@@ -700,13 +859,6 @@ export default function ProductManagement() {
             <input id="origin" name="origin" placeholder="เช่น สวนที่ จ.เชียงใหม่" value={form.origin} onChange={onChange} />
           </div>
 
-          <div className="frm">
-            <label htmlFor="product_status_id">สถานะสินค้า</label>
-            <select id="product_status_id" name="product_status_id" value={asStr(form.product_status_id ?? '')} onChange={onChange}>
-              {statusOptions}
-            </select>
-          </div>
-
           {/* แถว 4 */}
           <div className="frm">
             <label htmlFor="category_id">ประเภทสินค้า</label>
@@ -740,7 +892,7 @@ export default function ProductManagement() {
               {previews.map((p, idx) => (
                 <div className="pm-file" key={p.url}>
                   <span className="pm-badge" title={idx === 0 ? 'รูปหลักเมื่อบันทึก' : `ลำดับที่ ${idx + 1}`}>{idx === 0 ? '★' : idx + 1}</span>
-                  <img src={p.url} alt={p.name} />
+                  <img src={mediaSrc(p.url)} alt={p.name} /> {/* ⬅️ ใช้ mediaSrc เผื่ออนาคตมีกรณีที่ URL ถูก rewrite */}
                   <div className="pm-meta">
                     <div className="pm-name" title={p.name}>{p.name}</div>
                     <div className="pm-actions">
@@ -754,85 +906,183 @@ export default function ProductManagement() {
             </div>
           )}
 
-          {/* ★ VARIANTS QUICK MODE — พับ/กาง กล่องกรอกตัวเลือก */}
-          <div className="frm col-span-2">
-            <label className="checkbox-line">
-              <input
-                type="checkbox"
-                checked={quickVar.enabled}
-                onChange={e=>setQuickVar(q=>({...q, enabled: e.target.checked}))}
-              />
-              <span>ตัวเลือก/ขนาด (โหมดเร็ว) — สร้าง Variant พร้อมเพิ่มสินค้า</span>
-            </label>
+          {/* ➕ ปุ่มเปิด/ปิด Panel ตัวเลือก (แสดงตลอด แต่ถ้า “ยังไม่ได้แก้ไข/ยังไม่มีรหัส” จะ disable) */}
+          <div className="frm col-span-2" style={{marginTop: 8}}>
+            <button
+              type="button"
+              className="btn btn-primary btn-lg"
+              onClick={openVariantsPanel}
+              disabled={!isEditing || !editProductId}
+              title={!isEditing ? 'ต้องแก้ไขสินค้าก่อน' : undefined}
+            >
+              ➕ ตัวเลือกสินค้า (สี / ขนาด / วัสดุ)
+            </button>
           </div>
 
-          {quickVar.enabled && (
-            <div className="pm-quick-variant col-span-2">
-              <div className="pm-input-group pm-row-3">
-                <div className="frm">
-                  <label>ชื่อตัวเลือก 1</label>
-                  <input value={quickVar.opt1Name} onChange={e=>setQuickVar(q=>({...q, opt1Name: e.target.value}))} placeholder="เช่น สี" />
-                </div>
-                <div className="frm">
-                  <label>ค่า</label>
-                  <input value={quickVar.opt1Value} onChange={e=>setQuickVar(q=>({...q, opt1Value: e.target.value}))} placeholder="เช่น เขียว" />
-                </div>
-                <div className="frm">
-                  <label>SKU (ถ้ามี)</label>
-                  <input value={quickVar.sku} onChange={e=>setQuickVar(q=>({...q, sku: e.target.value}))} placeholder="เช่น PMJ-001-GRN" />
-                </div>
-              </div>
-
-              <div className="pm-input-group pm-row-3">
-                <div className="frm">
-                  <label>ชื่อตัวเลือก 2</label>
-                  <input value={quickVar.opt2Name} onChange={e=>setQuickVar(q=>({...q, opt2Name: e.target.value}))} placeholder="เช่น ขนาด" />
-                </div>
-                <div className="frm">
-                  <label>ค่า</label>
-                  <input value={quickVar.opt2Value} onChange={e=>setQuickVar(q=>({...q, opt2Value: e.target.value}))} placeholder="เช่น M / 6 นิ้ว" />
-                </div>
-                <div className="frm">
-                  <label>สถานะขาย</label>
-                  <select value={quickVar.is_active ? '1':'0'} onChange={e=>setQuickVar(q=>({...q, is_active: e.target.value==='1'}))}>
-                    <option value="1">เปิดขาย</option>
-                    <option value="0">ปิดขาย</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="pm-input-group pm-row-3">
-                <div className="frm">
-                  <label>ชื่อตัวเลือก 3 (ถ้าต้องการ)</label>
-                  <input value={quickVar.opt3Name} onChange={e=>setQuickVar(q=>({...q, opt3Name: e.target.value}))} placeholder="เช่น วัสดุ" />
-                </div>
-                <div className="frm">
-                  <label>ค่า</label>
-                  <input value={quickVar.opt3Value} onChange={e=>setQuickVar(q=>({...q, opt3Value: e.target.value}))} placeholder="เช่น เซรามิก" />
-                </div>
-                <div className="frm">
-                  <label>สต็อก (จำนวนเต็ม)</label>
-                  <input type="number" min="0" step="1" value={quickVar.stock} onChange={e=>setQuickVar(q=>({...q, stock: e.target.value}))} placeholder="เช่น 10" />
-                </div>
-              </div>
-
-              <div className="pm-input-group pm-row-3">
-                <div className="frm">
-                  <label>ราคาของ Variant (ถ้าว่าง = ใช้ราคาสินค้า)</label>
-                  <input type="number" min="0" step="1" value={quickVar.price} onChange={e=>setQuickVar(q=>({...q, price: e.target.value}))} placeholder="เช่น 180" />
-                </div>
-              </div>
-
-              <div className="hint">หากกรอก “ชื่อตัวเลือก + ค่า” อย่างน้อย 1 คู่ ระบบจะสร้าง Variant เดียวนี้ให้หลังเพิ่มสินค้า และผูกรูปที่อัปโหลดไว้เข้ากับ Variant ด้วย</div>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="pm-actions col-span-2">
-            <button type="submit" className="btn btn-primary btn-lg">{isEditing ? 'อัปเดต' : 'บันทึก'}</button>
-            {isEditing && <button type="button" className="btn btn-ghost btn-lg" onClick={clearForm}>ยกเลิกแก้ไข</button>}
+          {/* Actions — ปุ่มเดียว “บันทึก” */}
+          <div className="pm-actions col-span-2" style={{marginTop: 4}}>
+            <button type="submit" className="btn btn-primary btn-lg">บันทึก</button>
           </div>
         </form>
+
+        {/* Panel ตัวเลือก (ภายในหน้าเดียว) */}
+        {variantsOpen && (
+          <div className="pm-panel" style={{ marginTop: 12 }}>
+            <h3 className="section-title">ตัวเลือกสินค้า (Variants)</h3>
+
+            {/* ตั้งชื่อตัวเลือก + ใส่ค่าแบบชิป */}
+            <div className="pm-input-group pm-row-3">
+              <div className="frm">
+                <label>ชื่อตัวเลือก 1</label>
+                <input value={opt1Name} onChange={e=>setOpt1Name(e.target.value)} placeholder="เช่น สี" />
+                <div className="hint">พิมพ์ค่าแล้วกด Enter เพื่อเพิ่มชิป</div>
+                <div className="pm-files-preview" style={{gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))'}}>
+                  {opt1Values.map((v,i)=>(
+                    <div key={i} className="pm-file" style={{padding:8}}>
+                      <div className="pm-meta" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                        <strong>{v}</strong>
+                        <button type="button" className="btn-xxs danger" onClick={()=>setOpt1Values(opt1Values.filter((_,x)=>x!==i))}>×</button>
+                      </div>
+                    </div>
+                  ))}
+                  <input
+                    placeholder="เช่น เขียว แล้ว Enter"
+                    onKeyDown={(e)=>{ if(e.key==='Enter'){ e.preventDefault(); const v=e.currentTarget.value.trim(); if(v&&!opt1Values.includes(v)) setOpt1Values([...opt1Values,v]); e.currentTarget.value=''; } }}
+                  />
+                </div>
+              </div>
+
+              <div className="frm">
+                <label>ชื่อตัวเลือก 2 (ถ้ามี)</label>
+                <input value={opt2Name} onChange={e=>setOpt2Name(e.target.value)} placeholder="เช่น ขนาด" />
+                <div className="pm-files-preview" style={{gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))'}}>
+                  {opt2Values.map((v,i)=>(
+                    <div key={i} className="pm-file" style={{padding:8}}>
+                      <div className="pm-meta" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                        <strong>{v}</strong>
+                        <button type="button" className="btn-xxs danger" onClick={()=>setOpt2Values(opt2Values.filter((_,x)=>x!==i))}>×</button>
+                      </div>
+                    </div>
+                  ))}
+                  <input
+                    placeholder="เช่น M / 6 นิ้ว แล้ว Enter"
+                    onKeyDown={(e)=>{ if(e.key==='Enter'){ e.preventDefault(); const v=e.currentTarget.value.trim(); if(v&&!opt2Values.includes(v)) setOpt2Values([...opt2Values,v]); e.currentTarget.value=''; } }}
+                  />
+                </div>
+              </div>
+
+              <div className="frm">
+                <label>ชื่อตัวเลือก 3 (ถ้ามี)</label>
+                <input value={opt3Name} onChange={e=>setOpt3Name(e.target.value)} placeholder="เช่น วัสดุ" />
+                <div className="pm-files-preview" style={{gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))'}}>
+                  {opt3Values.map((v,i)=>(
+                    <div key={i} className="pm-file" style={{padding:8}}>
+                      <div className="pm-meta" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                        <strong>{v}</strong>
+                        <button type="button" className="btn-xxs danger" onClick={()=>setOpt3Values(opt3Values.filter((_,x)=>x!==i))}>×</button>
+                      </div>
+                    </div>
+                  ))}
+                  <input
+                    placeholder="เช่น เซรามิก แล้ว Enter"
+                    onKeyDown={(e)=>{ if(e.key==='Enter'){ e.preventDefault(); const v=e.currentTarget.value.trim(); if(v&&!opt3Values.includes(v)) setOpt3Values([...opt3Values,v]); e.currentTarget.value=''; } }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* ตารางแถว Variant อัตโนมัติ */}
+            <div className="pm-table-wrap" style={{marginTop:12}}>
+              <table className="pm-table">
+                <thead>
+                  <tr>
+                    <th>รูปภาพ</th>
+                    <th>{opt1Name || 'ตัวเลือก 1'}</th>
+                    <th>{opt2Name || 'ตัวเลือก 2'}</th>
+                    <th>{opt3Name || 'ตัวเลือก 3'}</th>
+                    <th>ราคา</th>
+                    <th>SKU</th>
+                    <th>สต็อก</th>
+                    <th className="th-actions">ลบ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {variantRows.map((r, i) => (
+                    <tr key={i}>
+                      <td>
+                        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                          <label className="btn btn-ghost btn-md" style={{cursor:'pointer'}}>
+                            📸 เพิ่มรูป
+                            <input type="file" accept="image/*" style={{display:'none'}}
+                                   onChange={(e)=>onUploadRowImage(e.target.files?.[0], i)} />
+                          </label>
+                          {(r.images || []).map((im,idx)=>(
+                            <div key={idx} style={{position:'relative'}}>
+                              <img src={mediaSrc(im.url)} alt="" style={{width:48,height:48,objectFit:'cover',borderRadius:8,border:'1px solid #e7ece9'}} />
+                              <button type="button" className="btn-xxs" style={{position:'absolute',top:-8,right:-8}} onClick={()=>removeRowImage(i,idx)}>×</button>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                      <td>{r.opt1 || '-'}</td>
+                      <td>{r.opt2 || '-'}</td>
+                      <td>{r.opt3 || '-'}</td>
+                      <td>
+                        <input
+                          type="number" min="0" step="1"
+                          value={r.price}
+                          onChange={(e)=>{
+                            const v = e.target.value;
+                            setVariantRows(prev=>{ const a=[...prev]; a[i]={...a[i], price:v}; return a; });
+                          }}
+                          placeholder="ไม่ระบุ"
+                        />
+                      </td>
+                      <td>
+                        <input
+                          value={r.sku}
+                          onChange={(e)=>{
+                            const v = e.target.value;
+                            setVariantRows(prev=>{ const a=[...prev]; a[i]={...a[i], sku:v}; return a; });
+                          }}
+                          placeholder="SKU"
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number" min="0" step="1"
+                          value={r.stock}
+                          onChange={(e)=>{
+                            const v = e.target.value;
+                            setVariantRows(prev=>{ const a=[...prev]; a[i]={...a[i], stock:v}; return a; });
+                          }}
+                          placeholder="ไม่ระบุ"
+                        />
+                      </td>
+                      <td className="cell-actions">
+                        <button type="button" className="btn btn-danger btn-md" onClick={()=>setVariantRows(prev=>prev.filter((_,x)=>x!==i))}>🗑️</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {variantRows.length === 0 && (
+                    <tr><td colSpan={8} style={{color:'#777',textAlign:'center',padding:'14px'}}>— ยังไม่มีตัวเลือก —</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Actions ของ Panel */}
+            <div style={{display:'flex',gap:10,marginTop:12}}>
+              <button type="button" className="btn" onClick={autoSku}>✨ เติม SKU อัตโนมัติ</button>
+              <button type="button" className="btn btn-primary" onClick={saveAllVariants}>💾 บันทึกตัวเลือกทั้งหมด</button>
+            </div>
+            <div className="hint" style={{marginTop:8, color:'#667085'}}>
+              • ระบบจะยิง <code>POST /api/variants/upsert-single</code> ต่อแถว<br/>
+              • รูปต่อแถวอัปโหลดผ่าน <code>POST /product-images/upload</code> (ถ้าไม่มีจะ fallback ไป <code>/upload</code>) แล้วแนบ <code>url</code> ใน payload<br/>
+              • สถานะการขายของสินค้า “อิงจากสต็อก” เท่านั้น
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ---------- Toolbar: filters/search/paging ---------- */}
@@ -952,7 +1202,7 @@ export default function ProductManagement() {
                         p.product_status_name === 'สต็อกใกล้หมด' ? 'status-badge warn' :
                         'status-badge ok'
                       }>
-                        {p.product_status_name ?? pickStatusName(p)}
+                        {p.product_status_name}
                       </span>
                     </td>
                     <td className="cell-actions">
@@ -965,7 +1215,6 @@ export default function ProductManagement() {
                       ) : (
                         <button className="btn btn-primary btn-md" onClick={() => unarchiveProduct(p.product_id)}>กู้คืน</button>
                       )}
-                      <Link to={`/admin/products/${p.product_id}/variants`} className="btn btn-ghost btn-md">ตัวเลือก/ขนาด</Link>
                     </td>
                   </tr>
                 );
@@ -1007,7 +1256,7 @@ export default function ProductManagement() {
                               p.product_status_name === 'สต็อกใกล้หมด' ? 'status-badge warn' :
                               'status-badge ok'
                             }>
-                              {p.product_status_name ?? pickStatusName(p)}
+                              {p.product_status_name}
                             </span>
                           </td>
                           <td className="cell-actions">
@@ -1032,6 +1281,27 @@ export default function ProductManagement() {
           </div>
         )}
       </div>
+
+      {/* ปุ่มสถานะล่างหน้า */}
+      {currentEditingProduct && (
+        <div className="pm-panel" style={{marginTop:12}}>
+          <h3 className="section-title">สถานะสินค้า (สำหรับ: {currentEditingProduct.product_name})</h3>
+          <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+            <button
+              type="button"
+              className={`btn ${currentEditingProduct.is_published ? 'btn-warn' : 'btn-primary'} btn-lg`}
+              onClick={()=>togglePublish(currentEditingProduct.product_id, !!currentEditingProduct.is_published)}
+            >
+              {currentEditingProduct.is_published ? 'ปิดการแสดง' : 'เผยแพร่'}
+            </button>
+            {!currentEditingProduct.is_archived ? (
+              <button type="button" className="btn btn-danger btn-lg" onClick={()=>archiveProduct(currentEditingProduct.product_id)}>เก็บเข้าคลัง</button>
+            ) : (
+              <button type="button" className="btn btn-primary btn-lg" onClick={()=>unarchiveProduct(currentEditingProduct.product_id)}>คืนจากคลัง</button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
