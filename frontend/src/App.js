@@ -1,4 +1,4 @@
-// [FRONTEND] src/App.js — FIX useLocation outside Router
+// [FRONTEND] src/App.js — FIX useLocation outside Router + ProductDetail route
 import React, { useEffect } from "react";
 import {
   BrowserRouter, Routes, Route, Navigate, useLocation,
@@ -12,7 +12,7 @@ import AdminLayout       from "./admin/AdminLayout";
 import Dashboard         from "./admin/Dashboard";
 import ProductEditPage   from "./admin/ProductEditPage";
 import InventoryPage     from "./admin/InventoryPage";
-import AllProducts from "./admin/AllProducts";
+import AllProducts       from "./admin/AllProducts";
 
 import AdminCategories    from "./admin/AdminCategories";
 import AdminSubcategories from "./admin/AdminSubcategories";
@@ -30,6 +30,7 @@ import ProductList   from "./pages/ProductList";
 import Plants        from "./pages/Plants";
 import Tools         from "./pages/Tools";
 import CartPage      from "./pages/CartPage";
+import ProductDetail from "./pages/ProductDetail";    // ✅ เพิ่ม import หน้ารายละเอียดสินค้า
 
 import { Toaster } from "react-hot-toast";
 import HeaderClassic from "./components/HeaderClassic";
@@ -120,6 +121,7 @@ function InnerApp() {
         <Route path="/plants" element={<Plants />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/products" element={<ProductList />} />
+        <Route path="/products/:id" element={<ProductDetail />} />  {/* ✅ route รายละเอียดสินค้า */}
         <Route path="/cart" element={<CartPage />} />
 
         <Route
@@ -169,7 +171,7 @@ function InnerApp() {
 
 /* ======================== App (สร้าง Router) ========================= */
 export default function App() {
-  // ❗❗ ห้ามใช้ useLocation ที่นี่ เพราะอยู่นอก Router
+  // ❗ ห้ามใช้ useLocation ที่นี่ เพราะอยู่นอก Router
   return (
     <BrowserRouter>
       <ErrorBoundary>

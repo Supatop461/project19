@@ -1,5 +1,7 @@
-/* FRONTEND: src/admin/ProductManagement.css — Minimal, Clean, Modern */
+/* FRONTEND: src/admin/ProductManagement.css — Minimal, Clean, Modern (Merged)  */
+/* รวม ProductManagement.css + VariantsManager.css ไว้ในไฟล์เดียว เรียบร้อย */
 
+/* ───────────────── Base & Tokens ───────────────── */
 @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=swap');
 
 *,*::before,*::after{ box-sizing:border-box; }
@@ -24,7 +26,7 @@
   --app-header: 56px; /* ปรับ 48–72px ตามของจริง */
 }
 
-/* Page */
+/* ───────────────── Page ───────────────── */
 .pm-page{
   font-family:"Sarabun",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
   color:var(--text);
@@ -44,7 +46,7 @@
 /* Links */
 .pm-links{ display:flex; gap:8px; flex-wrap:wrap; }
 
-/* Panel */
+/* ───────────────── Panel ───────────────── */
 .pm-panel{
   background:var(--panel);
   border:1px solid var(--border);
@@ -54,7 +56,7 @@
 }
 .section-title{ margin:0 0 12px; font-size:20px; font-weight:800; letter-spacing:.2px; }
 
-/* Form */
+/* ───────────────── Form ───────────────── */
 .pm-form{ display:grid; grid-template-columns:1fr 1fr; gap:12px 14px; }
 .frm{ display:flex; flex-direction:column; gap:6px; }
 .frm>label{ font-weight:800; color:#1e293b; letter-spacing:.15px; }
@@ -78,7 +80,7 @@
 .pm-form .col-span-2{ grid-column:1 / -1; }
 .pm-input-group.pm-row-3{ display:grid; grid-template-columns:1fr 210px 210px; gap:12px; }
 
-/* Buttons */
+/* ───────────────── Buttons ───────────────── */
 .btn{
   display:inline-flex; align-items:center; justify-content:center;
   padding:10px 14px; border:1.5px solid transparent; border-radius:12px;
@@ -102,7 +104,7 @@
 .btn-danger:hover{ background:#ffe0dc; }
 .btn-xxs{ padding:4px 8px; font-size:12px; border:1px solid var(--border); border-radius:8px; background:#fff; }
 
-/* ───────────────── Toolbar: ใช้ Flex-Wrap แทน Grid เพื่อตัดปัญหาทับ ─────────────── */
+/* ───────────────── Toolbar ───────────────── */
 .pm-toolbar-2{
   display:flex; flex-wrap:wrap; align-items:center;
   gap:10px 10px;
@@ -111,7 +113,6 @@
 }
 .sticky-toolbar{ position:static !important; } /* ปิด sticky 100% */
 
-/* องค์ประกอบใน toolbar */
 .pm-toolbar-2 .seg{ flex:0 0 auto; }
 .pm-search{ flex:1 1 360px; max-width:520px; }
 .pm-filter{ flex:0 1 220px; min-width:200px; }
@@ -119,13 +120,13 @@
   padding:10px 12px; border:1.5px solid var(--border); border-radius:12px; background:#fff; font-weight:600;
 }
 
-/* กล่อง “แสดง … รายการ/หน้า” */
+/* Per-page block */
 .pm-perpage{
   display:flex; align-items:center; gap:8px;
   flex:0 0 auto; min-height:42px;
 }
 
-/* ปุ่ม 🗃️ อยู่ขวาสุดของแถว; ถ้าพื้นที่ไม่พอจะย้ายลงบรรทัดใหม่เอง */
+/* Archived toggle */
 .btn-archived{ margin-left:auto; flex:0 0 auto; min-height:42px; }
 @media (max-width: 1280px){
   .btn-archived{ flex:1 1 100%; margin-left:0; }
@@ -183,7 +184,7 @@
 .btn-archived:hover{ transform:translateY(-1px); box-shadow:0 6px 16px rgba(15,23,42,.08); }
 .btn-archived.active{ background:var(--brand); color:#fff; border-color:transparent; }
 
-/* Alert bar */
+/* ───────────────── Alert bar ───────────────── */
 .pm-alertbar{
   display:flex; gap:8px; align-items:center; margin:8px 0 10px;
 }
@@ -194,7 +195,7 @@
 .pm-alert.warn{ background:#fff7ed; border-color:#fed7aa; color:#7c2d12; }
 .pm-alert.clear{ background:#fff; border-color:var(--border); color:#334155; }
 
-/* Summary + pager */
+/* ───────────────── Summary + pager ───────────────── */
 .pm-summary{
   display:flex; justify-content:space-between; align-items:center;
   margin:8px 0 12px; color:#444; gap:10px; flex-wrap:wrap;
@@ -212,7 +213,7 @@
   padding:8px 10px; border:1.5px solid var(--border); border-radius:10px; background:#fff; font-weight:700;
 }
 
-/* Table */
+/* ───────────────── Table ───────────────── */
 .pm-table-wrap{
   position: relative;
   z-index: 1;
@@ -220,7 +221,7 @@
 }
 .pm-table{ width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:15px; }
 
-/* หัวตาราง sticky แค่ใต้หัวเว็บ */
+/* หัวตาราง sticky ใต้หัวเว็บ */
 .pm-table thead th{
   background:linear-gradient(0deg,#f7faf7,#ffffff); color:#1f2937; font-weight:800; text-align:left;
   padding:11px 12px; border-bottom:1px solid var(--border);
@@ -292,7 +293,83 @@
 .toast.warn{ border-color:#fed7aa; background:#fff7ed; color:#7c2d12; }
 .toast.danger{ border-color:#fecaca; background:#fef2f2; color:#7f1d1d; }
 
-/* Responsive tweaks */
+/* ───────────────── Variants Manager (Embedded styles) ───────────────── */
+/* NOTE: เดิมคือ VariantsManager.css  — ผูกไว้ภายในหน้า ProductManagement เพื่อลดผลกระทบกับส่วนอื่น */
+
+.pm-page .vm-page{
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:20px;
+  box-shadow:var(--shadow);
+  margin-top:16px;
+  font-family:"Sarabun",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+}
+
+/* Header */
+.pm-page .vm-header{
+  display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:8px;
+}
+.pm-page .vm-title{ display:grid; gap:2px; }
+.pm-page .vm-product-name{
+  font-size:26px; font-weight:800; color:#15321c; line-height:1.2;
+}
+.pm-page .vm-product-code{
+  font-size:16px; font-weight:800; color:var(--brand); letter-spacing:.5px;
+}
+.pm-page .vm-back{
+  color:var(--brand); text-decoration:none; font-weight:600;
+}
+
+/* Flash message */
+.pm-page .vm-msg{
+  background:#e8f5e9; color:var(--brand-600);
+  padding:8px 12px; border-radius:8px; margin-top:10px; font-weight:600;
+}
+
+/* Options */
+.pm-page .vm-opt{ margin-top:12px; }
+.pm-page .vm-opt label{ display:block; font-weight:800; margin-bottom:6px; color:#1e293b; }
+.pm-page .vm-opt input{
+  padding:10px 12px; border:1.5px solid var(--border); border-radius:12px; width:100%;
+  background:#fff; outline:none; transition:box-shadow .12s,border-color .12s,background .12s;
+}
+.pm-page .vm-opt input:focus{ border-color:var(--brand); box-shadow:var(--ring); background:#fcfffc; }
+
+.pm-page .vm-chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.pm-page .vm-chip{
+  background:#f0fdf4; color:var(--brand-600); padding:4px 10px; border-radius:20px;
+  display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:700;
+  border:1px solid #bbf7d0;
+}
+.pm-page .vm-chip button{ background:none; border:none; cursor:pointer; color:#666; font-size:14px; }
+
+/* Table (variants grid) */
+.pm-page .vm-table{
+  width:100%; border-collapse:separate; border-spacing:0; margin-top:18px;
+  border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:var(--shadow);
+}
+.pm-page .vm-table th, .pm-page .vm-table td{
+  border-bottom:1px solid #e7ece9; padding:10px 12px; text-align:center; background:#fff;
+}
+.pm-page .vm-table thead th{
+  background:linear-gradient(0deg,#f7faf7,#ffffff); font-weight:800; color:#1f2937; position:sticky;
+  top: calc(var(--app-header) + 8px); z-index:3;
+}
+.pm-page .vm-thumb{ width:48px; height:48px; object-fit:cover; border-radius:8px; border:1px solid var(--border); }
+
+/* Upload cell */
+.pm-page .vm-upload{
+  width:48px; height:48px; display:inline-flex; align-items:center; justify-content:center;
+  border:1.5px dashed #b9c6bd; border-radius:8px; color:#667085; font-size:20px; cursor:pointer; position:relative; background:#fff;
+}
+.pm-page .vm-upload input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
+
+/* Actions under variants table (ใช้ปุ่มหลัก .btn เดิม ไม่สร้าง .btn ซ้ำ) */
+.pm-page .vm-actions{ display:flex; gap:10px; margin-top:16px; }
+.pm-page .vm-hint{ margin-top:12px; font-size:13px; color:#667085; line-height:1.6; }
+
+/* ───────────────── Responsive ───────────────── */
 @media (min-width:1200px){ .pm-search{ flex-basis:440px; } }
 @media (max-width:1200px){
   .pm-input-group.pm-row-3{ grid-template-columns:1fr 1fr; }

@@ -1,0 +1,78 @@
+/* frontend/src/pages/ProductDetail.css */
+/* ใช้ร่วมกับ Tailwind เพื่อปรับดีเทลให้เนียนขึ้น */
+
+.product-detail {
+  font-family: "Sarabun", sans-serif;
+  color: #1b4332;
+}
+
+.product-detail h1,
+.product-detail h2 {
+  font-weight: 700;
+  color: #166534;
+}
+
+.product-detail .price-tag {
+  color: #15803d;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.product-detail .sku-label,
+.product-detail .stock-label {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 0.8rem;
+}
+
+.product-detail .variant-option button {
+  transition: all 0.15s ease-in-out;
+}
+
+.product-detail .variant-option button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.product-detail .gallery-thumb {
+  border: 1px solid #d1fae5;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.product-detail .gallery-thumb:hover {
+  border-color: #34d399;
+}
+
+.product-detail .gallery-thumb.active {
+  border-color: #16a34a;
+}
+
+.product-detail .add-cart-btn {
+  background: #16a34a;
+  color: white;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.product-detail .add-cart-btn:hover {
+  background: #15803d;
+}
+
+.product-detail .go-cart-btn {
+  border: 1px solid #bbf7d0;
+  color: #14532d;
+  background: #fff;
+  transition: all 0.2s;
+}
+
+.product-detail .go-cart-btn:hover {
+  background: #f0fdf4;
+}

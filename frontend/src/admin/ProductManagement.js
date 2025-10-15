@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import './ProductManagement.css';
-import { api, path, mediaSrc } from '../lib/api'; // ⬅️ เพิ่ม mediaSrc เพื่อแสดงรูปให้ถูกต้องแม้เซิร์ฟเวอร์คืน path แบบ relative
+import { api, path, mediaSrc } from '../lib/api'; // ✅ ใช้ mediaSrc กันเคส URL เป็น relative
 import { useLookups } from '../lib/lookups';
 
 /* ---------- Helpers ---------- */
@@ -17,7 +17,7 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/* ---------- Tiny Toast (in-file, no extra libs) ---------- */
+/* ---------- Tiny Toast (in-file) ---------- */
 function useToasts() {
   const [toasts, setToasts] = useState([]);
   const push = (msg, type = 'info') => {
@@ -43,7 +43,7 @@ export default function ProductManagement() {
   const [perPage, setPerPage] = useState(20); // 10/20/50/100/0(all)
   const [page, setPage] = useState(1);
 
-  // ✅ กรองตามสต็อก + สรุปจำนวนใกล้หมด/หมด
+  // กรองตามสต็อก + สรุปจำนวนใกล้หมด/หมด
   const [stockFilter, setStockFilter] = useState('all'); // all | low | out
 
   // ✅ lookups
@@ -55,7 +55,7 @@ export default function ProductManagement() {
   const [isEditing, setIsEditing] = useState(false);
   const [editProductId, setEditProductId] = useState(null);
 
-  // ✅ ฟอร์ม (ตัด product_status_id ออก)
+  // ✅ ฟอร์ม (ไม่ใช้ product_status_id)
   const [form, setForm] = useState({
     product_name: '',
     description: '',
@@ -68,7 +68,7 @@ export default function ProductManagement() {
     origin: ''
   });
 
-  /* ---------- Variants Panel (Full Mode) ---------- */
+  /* ---------- Variants Panel ---------- */
   const [variantsOpen, setVariantsOpen] = useState(false);
 
   // ชื่อตัวเลือก 1–3
@@ -81,11 +81,14 @@ export default function ProductManagement() {
   const [opt2Values, setOpt2Values] = useState([]);
   const [opt3Values, setOpt3Values] = useState([]);
 
-  // ตารางคอมโบ (แถวของ Variant)
-  // แต่ละแถว: { opt1, opt2, opt3, price, sku, stock, images:[{url,image_id,is_primary,position}], variant_id? }
+  // ตารางคอมโบ (แต่ละแถวไม่มีฟิลด์ stock แล้ว) ⬅️ ตัด stock ออก
+  // แต่ละแถว: { opt1, opt2, opt3, price, sku, images:[{url,image_id,is_primary,position}], variant_id? }
   const [variantRows, setVariantRows] = useState([]);
 
-  // ✨ refs
+  // แคชรายการ SKU ลูกของสินค้าแต่ละตัว (แสดงใต้ชื่อสินค้าแม่)
+  const [variantsByProduct, setVariantsByProduct] = useState({}); // { [product_id]: [{sku, option_text}] }
+
+  // refs
   const catRef = useRef(null);
   const formTopRef = useRef(null);
   const nameInputRef = useRef(null);
@@ -107,7 +110,7 @@ export default function ProductManagement() {
       });
       let items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
 
-      // ✅ ผูกสถานะจาก stock เพื่อแสดงผล (แทนการใช้ตารางสถานะ)
+      // ผูกสถานะจาก stock เพื่อแสดงผล (แทนการใช้ตารางสถานะ)
       items = (items || []).map(p => {
         const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
         if (stock <= 0) {
@@ -149,7 +152,7 @@ export default function ProductManagement() {
     }
   }
 
-  /* ---------- Upload (per-variant image) — แก้ให้แสดงพรีวิวทันที + รองรับ path relative ---------- */
+  /* ---------- Upload (per-variant image) ---------- */
   async function uploadVariantImage(file) {
     if (!file) return null;
 
@@ -307,9 +310,8 @@ export default function ProductManagement() {
       opt3: v.option3_value ?? v.opt3 ?? v.material ?? null,
       price: v.price ?? '',
       sku: v.sku ?? '',
-      stock: v.stock ?? v.stock_qty ?? v.quantity ?? '',
       images: (v.images || []).map((im, i) => ({
-        url: mediaSrc(im.url ?? im.image_url ?? im.path ?? ''), // ⬅️ ห่อด้วย mediaSrc เพื่อแสดงได้แน่นอน
+        url: mediaSrc(im.url ?? im.image_url ?? im.path ?? ''),
         image_id: im.image_id ?? im.id ?? null,
         is_primary: !!im.is_primary || i === 0, position: im.position ?? (i + 1)
       }))
@@ -342,7 +344,7 @@ export default function ProductManagement() {
     setIsEditing(true);
     setEditProductId(p.product_id);
 
-    // ✅ เปิด Panel ตัวเลือกอัตโนมัติ และดึงข้อมูลตัวเลือกเดิมขึ้นมา
+    // เปิด Panel ตัวเลือกอัตโนมัติ และดึงข้อมูลตัวเลือกเดิมขึ้นมา
     setVariantsOpen(true);
     await loadExistingVariants(p.product_id);
 
@@ -378,6 +380,44 @@ export default function ProductManagement() {
     setOpt1Name('สี'); setOpt2Name('ขนาด'); setOpt3Name('');
     setOpt1Values([]); setOpt2Values([]); setOpt3Values([]);
     setVariantRows([]);
+  };
+
+  /* ---------- ช่วยเซฟตัวเลือก (เรียกจาก onSubmit เท่านั้น) ---------- */
+  const saveVariantsForProduct = async (productId) => {
+    if (!productId) return;
+
+    const effective = (variantRows || []).filter(r => r.opt1 || r.opt2 || r.opt3);
+    if (effective.length === 0) return;
+
+    let ok = 0, fail = 0;
+    for (const r of effective) {
+      const payload = {
+        product_id: productId,
+        options: [
+          r.opt1 ? { name: opt1Name, value: r.opt1 } : null,
+          r.opt2 ? { name: opt2Name, value: r.opt2 } : null,
+          r.opt3 && opt3Name ? { name: opt3Name, value: r.opt3 } : null,
+        ].filter(Boolean),
+        sku: r.sku || null,
+        price: r.price !== '' ? Number(r.price) : null,
+        // ⬇️ ไม่มี stock ใน payload แล้ว
+        images: (r.images || []).map((im, i) => ({
+          url: mediaSrc(im.url), is_primary: i === 0, position: i + 1
+        }))
+      };
+
+      try {
+        await api.post(path('/api/variants/upsert-single'), payload);
+        ok++;
+      } catch (e) {
+        console.error('upsert-single fail', e?.response?.data || e?.message || e);
+        fail++;
+      }
+    }
+
+    if (ok && !fail) push(`✅ บันทึกตัวเลือกทั้งหมดแล้ว (${ok} แถว)`, 'ok');
+    else if (ok && fail) push(`⚠️ บันทึกสำเร็จ ${ok} แถว / ล้มเหลว ${fail} แถว`, 'warn');
+    else push('❌ บันทึกตัวเลือกไม่สำเร็จ', 'danger');
   };
 
   /* ---------- Submit product (ปุ่มเดียว: “บันทึก”) ---------- */
@@ -461,6 +501,9 @@ export default function ProductManagement() {
         }
       }
 
+      // ✅ เซฟตัวเลือกทั้งหมดที่หน้าเดียวกันนี้ (ไม่มีปุ่มแยกแล้ว)
+      await saveVariantsForProduct(productId);
+
       await fetchProducts();
       await reloadLookups();
 
@@ -468,7 +511,7 @@ export default function ProductManagement() {
       if (!isEditing && productId) {
         const created = (Array.isArray(products) ? products : []).find(p => p.product_id === productId) || { product_id: productId };
         await onEdit(created);
-        push('🎉 บันทึกสินค้าแล้ว เปิดตัวเลือกให้แก้ไขต่อได้เลย', 'ok');
+        push('🎉 บันทึกสินค้าแล้ว และบันทึกตัวเลือกเรียบร้อย', 'ok');
         setSelectedFiles([]);
         setPreviews([]);
         return;
@@ -553,7 +596,7 @@ export default function ProductManagement() {
       if (catFilter && asStr(p.category_id) !== asStr(catFilter)) return false;
       if (subcatFilter && asStr(p.subcategory_id) !== asStr(subcatFilter)) return false;
 
-      // ✅ กรองตามสต็อก
+      // กรองตามสต็อก
       const s = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
       if (stockFilter === 'low' && !(s > 0 && s <= 5)) return false;
       if (stockFilter === 'out' && !(s <= 0)) return false;
@@ -593,24 +636,17 @@ export default function ProductManagement() {
     return Array.from(map.entries());
   }, [groupByCategory, paged]);
 
-  /* ---------- สร้างแถวคอมโบใหม่เมื่อค่า chips เปลี่ยน ---------- */
+  /* ---------- สร้างแถวคอมโบใหม่เมื่อค่า chips เปลี่ยน (ไม่มี stock) ---------- */
   useEffect(() => {
     const v1 = opt1Values.length ? opt1Values : [null];
     const v2 = opt2Values.length ? opt2Values : [null];
     const v3 = opt3Values.length ? opt3Values : [null];
     const combos = [];
     for (const a of v1) for (const b of v2) for (const c of v3) {
-      combos.push({ opt1: a, opt2: b, opt3: c, price: '', sku: '', stock: '', images: [] });
+      combos.push({ opt1: a, opt2: b, opt3: c, price: '', sku: '', images: [] });
     }
     setVariantRows(combos);
   }, [opt1Values, opt2Values, opt3Values]);
-
-  const addChip = (list, setList, txt) => {
-    const v = String(txt || '').trim();
-    if (!v) return;
-    if (!list.includes(v)) setList([...list, v]);
-  };
-  const removeChip = (list, setList, idx) => setList(list.filter((_, i) => i !== idx));
 
   const onUploadRowImage = async (file, rowIdx) => {
     if (!file) return;
@@ -629,7 +665,7 @@ export default function ProductManagement() {
         const a = [...prev];
         const imgs = [...a[rowIdx].images];
         const idx = imgs.findIndex(x => x.url === tmpUrl);
-        if (idx >= 0) imgs[idx] = { ...imgs[idx], url: mediaSrc(up.url), image_id: up.image_id ?? imgs[idx].image_id, __temp: false }; // ⬅️ แสดงรูปจริงด้วย mediaSrc
+        if (idx >= 0) imgs[idx] = { ...imgs[idx], url: mediaSrc(up.url), image_id: up.image_id ?? imgs[idx].image_id, __temp: false };
         a[rowIdx] = { ...a[rowIdx], images: imgs };
         return a;
       });
@@ -677,48 +713,6 @@ export default function ProductManagement() {
     push('✨ เติม SKU อัตโนมัติให้ทุกแถวแล้ว', 'ok');
   };
 
-  const saveAllVariants = async () => {
-    if (!editProductId) {
-      push('กรุณา “บันทึกสินค้า” ให้ได้รหัสก่อน แล้วค่อยบันทึกตัวเลือก', 'warn');
-      return;
-    }
-    const effective = variantRows.filter(r => r.opt1 || r.opt2 || r.opt3);
-    if (effective.length === 0) {
-      push('ยังไม่มีแถวตัวเลือกที่จะบันทึก', 'warn');
-      return;
-    }
-
-    let ok = 0, fail = 0;
-    for (const r of effective) {
-      const payload = {
-        product_id: editProductId,
-        options: [
-          r.opt1 ? { name: opt1Name, value: r.opt1 } : null,
-          r.opt2 ? { name: opt2Name, value: r.opt2 } : null,
-          r.opt3 && opt3Name ? { name: opt3Name, value: r.opt3 } : null,
-        ].filter(Boolean),
-        sku: r.sku || null,
-        price: r.price !== '' ? Number(r.price) : null,
-        stock: r.stock !== '' ? Number(r.stock) : null,
-        images: (r.images || []).map((im, i) => ({
-          url: mediaSrc(im.url), is_primary: i === 0, position: i + 1
-        }))
-      };
-
-      try {
-        await api.post(path('/api/variants/upsert-single'), payload);
-        ok++;
-      } catch (e) {
-        console.error('upsert-single fail', e?.response?.data || e?.message || e);
-        fail++;
-      }
-    }
-
-    if (ok && !fail) push(`✅ บันทึกตัวเลือกทั้งหมดแล้ว (${ok} แถว)`, 'ok');
-    else if (ok && fail) push(`⚠️ บันทึกสำเร็จ ${ok} แถว / ล้มเหลว ${fail} แถว`, 'warn');
-    else push('❌ บันทึกตัวเลือกไม่สำเร็จ', 'danger');
-  };
-
   const openVariantsPanel = async () => {
     if (!isEditing || !editProductId) {
       push('กรุณา “แก้ไขสินค้า” หรือบันทึกสินค้าให้ได้รหัสก่อน', 'warn');
@@ -735,6 +729,49 @@ export default function ProductManagement() {
     [products, editProductId]
   );
 
+  /* ---------- ดึงรายการ SKU ลูกเพื่อแสดงใต้ตาราง (เฉพาะสินค้าที่กำลังแสดงในหน้า) ---------- */
+  const fetchVariantsForProduct = useCallback(async (productId) => {
+    const tryEndpoints = [
+      path(`/admin/products/${productId}/variants`),
+      path(`/products/${productId}/variants`),
+      path(`/api/variants/by-product/${productId}`),
+      path(`/api/variants?product_id=${productId}`)
+    ];
+    for (const url of tryEndpoints) {
+      try {
+        const res = await api.get(url);
+        const arr = res?.data?.items || res?.data?.rows || res?.data || [];
+        if (Array.isArray(arr)) {
+          const mapped = arr.map(v => ({
+            sku: v.sku || '',
+            option_text: [
+              v.option1_value ?? v.opt1 ?? v.color ?? null,
+              v.option2_value ?? v.opt2 ?? v.size ?? null,
+              v.option3_value ?? v.opt3 ?? v.material ?? null
+            ].filter(Boolean).join(' / ')
+          }));
+          setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
+          return;
+        }
+      } catch { /* try next */ }
+    }
+    setVariantsByProduct(prev => ({ ...prev, [productId]: [] }));
+  }, []);
+
+  useEffect(() => {
+    const ids = (paged || []).map(p => p.product_id);
+    const missing = ids.filter(id => !(id in variantsByProduct));
+    if (missing.length) {
+      (async () => {
+        for (const id of missing) {
+          await fetchVariantsForProduct(id);
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paged]);
+
+  /* ---------- Render ---------- */
   if (loading || lkLoading) return <div style={{ padding: 12 }}>กำลังโหลดข้อมูล…</div>;
   if (lkError) console.warn('⚠ lookups error:', lkError);
 
@@ -892,7 +929,7 @@ export default function ProductManagement() {
               {previews.map((p, idx) => (
                 <div className="pm-file" key={p.url}>
                   <span className="pm-badge" title={idx === 0 ? 'รูปหลักเมื่อบันทึก' : `ลำดับที่ ${idx + 1}`}>{idx === 0 ? '★' : idx + 1}</span>
-                  <img src={mediaSrc(p.url)} alt={p.name} /> {/* ⬅️ ใช้ mediaSrc เผื่ออนาคตมีกรณีที่ URL ถูก rewrite */}
+                  <img src={mediaSrc(p.url)} alt={p.name} />
                   <div className="pm-meta">
                     <div className="pm-name" title={p.name}>{p.name}</div>
                     <div className="pm-actions">
@@ -906,7 +943,7 @@ export default function ProductManagement() {
             </div>
           )}
 
-          {/* ➕ ปุ่มเปิด/ปิด Panel ตัวเลือก (แสดงตลอด แต่ถ้า “ยังไม่ได้แก้ไข/ยังไม่มีรหัส” จะ disable) */}
+          {/* ปุ่มเปิด/ปิด Panel ตัวเลือก */}
           <div className="frm col-span-2" style={{marginTop: 8}}>
             <button
               type="button"
@@ -925,7 +962,7 @@ export default function ProductManagement() {
           </div>
         </form>
 
-        {/* Panel ตัวเลือก (ภายในหน้าเดียว) */}
+        {/* Panel ตัวเลือก (ไม่มีคอลัมน์สต็อก + ไม่มีปุ่มบันทึกแยก) */}
         {variantsOpen && (
           <div className="pm-panel" style={{ marginTop: 12 }}>
             <h3 className="section-title">ตัวเลือกสินค้า (Variants)</h3>
@@ -991,7 +1028,7 @@ export default function ProductManagement() {
               </div>
             </div>
 
-            {/* ตารางแถว Variant อัตโนมัติ */}
+            {/* ตารางแถว Variant อัตโนมัติ (ไม่มีคอลัมน์ “สต็อก”) */}
             <div className="pm-table-wrap" style={{marginTop:12}}>
               <table className="pm-table">
                 <thead>
@@ -1002,7 +1039,6 @@ export default function ProductManagement() {
                     <th>{opt3Name || 'ตัวเลือก 3'}</th>
                     <th>ราคา</th>
                     <th>SKU</th>
-                    <th>สต็อก</th>
                     <th className="th-actions">ลบ</th>
                   </tr>
                 </thead>
@@ -1048,38 +1084,24 @@ export default function ProductManagement() {
                           placeholder="SKU"
                         />
                       </td>
-                      <td>
-                        <input
-                          type="number" min="0" step="1"
-                          value={r.stock}
-                          onChange={(e)=>{
-                            const v = e.target.value;
-                            setVariantRows(prev=>{ const a=[...prev]; a[i]={...a[i], stock:v}; return a; });
-                          }}
-                          placeholder="ไม่ระบุ"
-                        />
-                      </td>
                       <td className="cell-actions">
                         <button type="button" className="btn btn-danger btn-md" onClick={()=>setVariantRows(prev=>prev.filter((_,x)=>x!==i))}>🗑️</button>
                       </td>
                     </tr>
                   ))}
                   {variantRows.length === 0 && (
-                    <tr><td colSpan={8} style={{color:'#777',textAlign:'center',padding:'14px'}}>— ยังไม่มีตัวเลือก —</td></tr>
+                    <tr><td colSpan={7} style={{color:'#777',textAlign:'center',padding:'14px'}}>— ยังไม่มีตัวเลือก —</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
 
-            {/* Actions ของ Panel */}
+            {/* Actions ของ Panel: ไม่มีปุ่มบันทึก — ใช้ปุ่ม “บันทึก” หลักของหน้า */}
             <div style={{display:'flex',gap:10,marginTop:12}}>
               <button type="button" className="btn" onClick={autoSku}>✨ เติม SKU อัตโนมัติ</button>
-              <button type="button" className="btn btn-primary" onClick={saveAllVariants}>💾 บันทึกตัวเลือกทั้งหมด</button>
-            </div>
-            <div className="hint" style={{marginTop:8, color:'#667085'}}>
-              • ระบบจะยิง <code>POST /api/variants/upsert-single</code> ต่อแถว<br/>
-              • รูปต่อแถวอัปโหลดผ่าน <code>POST /product-images/upload</code> (ถ้าไม่มีจะ fallback ไป <code>/upload</code>) แล้วแนบ <code>url</code> ใน payload<br/>
-              • สถานะการขายของสินค้า “อิงจากสต็อก” เท่านั้น
+              <span className="hint" style={{alignSelf:'center', color:'#667085'}}>
+                เมื่อแก้ไขเสร็จ ให้กดปุ่ม <strong>“บันทึก”</strong> ด้านบน เพื่อบันทึกตัวเลือกทั้งหมดพร้อมสินค้า
+              </span>
             </div>
           </div>
         )}
@@ -1183,6 +1205,7 @@ export default function ProductManagement() {
                 const published = (typeof p.is_published === 'boolean') ? p.is_published : true;
                 const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
                 const stockClass = stock <= 0 ? 'stock-badge danger' : stock <= 5 ? 'stock-badge warn' : 'stock-badge ok';
+                const skus = variantsByProduct[p.product_id] || null;
 
                 return (
                   <tr key={p.product_id} className={p.is_archived ? 'is-archived' : ''}>
@@ -1192,6 +1215,14 @@ export default function ProductManagement() {
                         <strong className="product-name">{p.product_name}</strong>
                         {p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}
                       </span>
+                      {/* ⬇️ แสดงลูก SKU ใต้ชื่อสินค้า */}
+                      <div className="subtext" style={{marginTop:4, color:'#667085', fontSize:12}}>
+                        {skus
+                          ? (skus.length
+                              ? <>SKU ลูก: {skus.map(s => s.sku || '(ไม่ระบุ)').filter(Boolean).join(', ')}</>
+                              : 'SKU ลูก: — ไม่มี —')
+                          : 'SKU ลูก: กำลังโหลด…'}
+                      </div>
                     </td>
                     <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
                     <td><span className={stockClass}>{stock}</span></td>
@@ -1240,12 +1271,20 @@ export default function ProductManagement() {
                       const published = (typeof p.is_published === 'boolean') ? p.is_published : true;
                       const stock = Number(p.stock_qty ?? p.stock ?? p.stock_quantity ?? 0);
                       const stockClass = stock <= 0 ? 'stock-badge danger' : stock <= 5 ? 'stock-badge warn' : 'stock-badge ok';
+                      const skus = variantsByProduct[p.product_id] || null;
 
                       return (
                         <tr key={p.product_id} className={p.is_archived ? 'is-archived' : ''}>
                           <td>
                             <span className={`pill ${published ? 'on' : 'off'}`}>{published ? 'กำลังแสดง' : 'ถูกซ่อน'}</span>
                             <span className="name-with-badges"><strong className="product-name">{p.product_name}</strong>{p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}</span>
+                            <div className="subtext" style={{marginTop:4, color:'#667085', fontSize:12}}>
+                              {skus
+                                ? (skus.length
+                                    ? <>SKU ลูก: {skus.map(s => s.sku || '(ไม่ระบุ)').filter(Boolean).join(', ')}</>
+                                    : 'SKU ลูก: — ไม่มี —')
+                                : 'SKU ลูก: กำลังโหลด…'}
+                            </div>
                           </td>
                           <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
                           <td><span className={stockClass}>{stock}</span></td>

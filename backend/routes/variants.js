@@ -1119,6 +1119,74 @@ router.post('/products/:id/resolve-variant', async (req, res) => {
   }
 });
 
+/* =========================================================
+ * ALIAS (อ่าน variants ตาม product_id โดยตรง)
+ * ========================================================= */
+
+async function queryAliasItems(productId) {
+  // ใช้ live view ถ้ามี, ไม่งั้น fallback ตารางจริง
+  if (await hasView('v_product_variants_live_stock')) {
+    const { rows } = await db.query(
+      `
+      SELECT
+        lv.variant_id, lv.product_id, lv.sku,
+        COALESCE(lv.price_override, 0) AS price,
+        lv.stock::int                   AS stock,
+        COALESCE(lv.is_active, TRUE)    AS is_active,
+        COALESCE(lv.image_url, '')      AS image_url
+      FROM v_product_variants_live_stock lv
+      WHERE lv.product_id = $1
+      ORDER BY lv.variant_id ASC
+    `,
+      [productId]
+    );
+    return rows;
+  }
+
+  const { rows } = await db.query(
+    `
+    SELECT
+      v.variant_id, v.product_id, v.sku,
+      COALESCE(v.price_override, v.price, 0) AS price,
+      COALESCE(v.stock_qty, v.stock, 0)::int AS stock,
+      COALESCE(v.is_active, TRUE)            AS is_active,
+      COALESCE(v.image_url, '')              AS image_url
+    FROM product_variants v
+    WHERE v.product_id = $1
+    ORDER BY v.variant_id ASC
+  `,
+    [productId]
+  );
+  return rows;
+}
+
+// GET /api/variants/by-product/:productId
+router.get('/by-product/:productId', ...mustAdmin, async (req, res) => {
+  const productId = parseInt(req.params.productId, 10);
+  if (!Number.isInteger(productId)) return res.status(400).json({ error: 'Invalid product id' });
+  try {
+    const items = await queryAliasItems(productId);
+    return res.json({ items });
+  } catch (err) {
+    console.error('GET /variants/by-product/:id error', err);
+    return res.status(500).json({ error: 'Failed to load variants' });
+  }
+});
+
+// GET /api/variants?product_id=XX
+router.get('/', ...mustAdmin, async (req, res) => {
+  const productId = parseInt(req.query.product_id, 10);
+  if (!Number.isInteger(productId)) return res.status(400).json({ error: 'product_id required' });
+  try {
+    const items = await queryAliasItems(productId);
+    return res.json({ items });
+  } catch (err) {
+    console.error('GET /variants?product_id error', err);
+    return res.status(500).json({ error: 'Failed to load variants' });
+  }
+});
+
+
 module.exports = router;
 
 /* -------------------- Manual test --------------------
