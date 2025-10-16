@@ -90,6 +90,7 @@ export default function ProductManagement() {
   const [variantsOpen, setVariantsOpen] = useState(false);
 
   // ชื่อตัวเลือก 1–3
+  
   const [opt1Name, setOpt1Name] = useState('สี');
   const [opt2Name, setOpt2Name] = useState('ขนาด');
   const [opt3Name, setOpt3Name] = useState('');
@@ -99,7 +100,7 @@ export default function ProductManagement() {
   const [opt2Values, setOpt2Values] = useState([]);
   const [opt3Values, setOpt3Values] = useState([]);
 
-  // ตารางคอมโบ (แต่ละแถวไม่มีฟิลด์ stock แล้ว) ⬅️ ตัด stock ออก
+  // ตารางคอมโบ (แต่ละแถวไม่มีฟิลด์ stock แล้ว)
   // แต่ละแถว: { opt1, opt2, opt3, price, sku, images:[{url,image_id,is_primary,position}], variant_id? }
   const [variantRows, setVariantRows] = useState([]);
 
@@ -444,7 +445,7 @@ export default function ProductManagement() {
 
     const trimmedPrice = asStr(form.price).trim();
     const priceInt = Number.parseInt(trimmedPrice, 10);
-    if (!Number.isInteger(priceInt) || priceInt < 0 || asStr(priceInt) !== trimmedPrice.replace(/^0+(?=\\d)/, '')) {
+    if (!Number.isInteger(priceInt) || priceInt < 0 || asStr(priceInt) !== trimmedPrice.replace(/^0+(?=\d)/, '')) {
       push('ราคา ต้องเป็น “จำนวนเต็มไม่ติดลบ” เท่านั้น', 'danger');
       return;
     }
@@ -759,16 +760,16 @@ export default function ProductManagement() {
         const arr = res?.data?.items || res?.data?.rows || res?.data || [];
         if (Array.isArray(arr)) {
           const mapped = arr.map(v => ({
-          sku: v.sku || '',
-          option_text: [
-            v.option1_value ?? v.opt1 ?? v.color ?? null,
-            v.option2_value ?? v.opt2 ?? v.size ?? null,
-            v.option3_value ?? v.opt3 ?? v.material ?? null
-          ].filter(Boolean).join(' / '),
-          price: Number(v.price ?? v.selling_price ?? v.variant_price ?? v.base_price ?? 0),
-          stock: Number(v.stock_qty ?? v.stock ?? v.qty ?? v.quantity ?? 0)
-        }));
-setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
+            sku: v.sku || '',
+            option_text: [
+              v.option1_value ?? v.opt1 ?? v.color ?? null,
+              v.option2_value ?? v.opt2 ?? v.size ?? null,
+              v.option3_value ?? v.opt3 ?? v.material ?? null
+            ].filter(Boolean).join(' / '),
+            price: Number(v.price ?? v.selling_price ?? v.variant_price ?? v.base_price ?? 0),
+            stock: Number(v.stock_qty ?? v.stock ?? v.qty ?? v.quantity ?? 0)
+          }));
+          setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
           return;
         }
       } catch { /* try next */ }
@@ -970,6 +971,16 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
             >
               ➕ ตัวเลือกสินค้า (สี / ขนาด / วัสดุ)
             </button>
+            {/* ➜ ปุ่มไปหน้าแก้ไข SKU แบบเต็มจอ (เฉพาะตอนแก้ไขสินค้าเดิม) */}
+            {isEditing && editProductId && (
+              <Link to={`/admin/products/${editProductId}/variants`}
+                className="btn btn-ghost btn-lg"
+                style={{ marginLeft: 8 }}
+                title="ไปหน้าแก้ไข SKU (เต็มจอ)"
+              >
+                ✏️ ไปหน้าแก้ไข SKU
+              </Link>
+            )}
           </div>
 
           {/* Actions — ปุ่มเดียว “บันทึก” */}
@@ -1112,7 +1123,7 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
               </table>
             </div>
 
-            {/* Actions ของ Panel: ไม่มีปุ่มบันทึก — ใช้ปุ่ม “บันทึก” หลักของหน้า */}
+            {/* Actions ของ Panel */}
             <div style={{display:'flex',gap:10,marginTop:12}}>
               <button type="button" className="btn" onClick={autoSku}>✨ เติม SKU อัตโนมัติ</button>
               <span className="hint" style={{alignSelf:'center', color:'#667085'}}>
@@ -1233,17 +1244,19 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
                       </span>
                       {/* ⬇️ แสดงลูก SKU ใต้ชื่อสินค้า */}
                       <div className="subtext">
-  {skus
-    ? (skus.length ? (
-        <ol className="sku-list">{(skus || []).map((s, idx) => formatSkuLine(s)).filter(Boolean).length
-  ? (skus || []).map((s, idx) => {
-      const line = formatSkuLine(s);
-      return line ? <li key={idx}><span style={{fontWeight:600}}>{idx + 1}.</span> {line}</li> : null;
-    })
-  : null}</ol>
-      ) : 'SKU ลูก: — ไม่มี —')
-    : 'SKU ลูก: กำลังโหลด…'}
-</div>
+                        {skus
+                          ? (skus.length ? (
+                              <ol className="sku-list">
+                                {(skus || []).map((s, idx) => formatSkuLine(s)).filter(Boolean).length
+                                  ? (skus || []).map((s, idx) => {
+                                      const line = formatSkuLine(s);
+                                      return line ? <li key={idx}><span style={{fontWeight:600}}>{idx + 1}.</span> {line}</li> : null;
+                                    })
+                                  : null}
+                              </ol>
+                            ) : 'SKU ลูก: — ไม่มี —')
+                          : 'SKU ลูก: กำลังโหลด…'}
+                      </div>
                     </td>
                     <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
                     <td><span className={stockClass}>{stock}</span></td>
@@ -1262,6 +1275,14 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
                         {published ? 'ไม่แสดง' : 'แสดง'}
                       </button>
                       <button className="btn btn-ghost btn-md" onClick={() => onEdit(p)}>แก้ไข</button>
+                      {/* ➜ ปุ่มไปหน้าแก้ไข SKU */}
+                      <Link to={`/admin/products/${p.product_id}/variants`}
+                        onClick={(e)=>{ if(!p?.product_id){ e.preventDefault(); alert("ไม่พบรหัสสินค้า"); } }}
+                        className="btn btn-ghost btn-md"
+                        title="ไปหน้าแก้ไข SKU ของสินค้านี้"
+                      >
+                        แก้ไข SKU
+                      </Link>
                       {!p.is_archived ? (
                         <button className="btn btn-danger btn-md" onClick={() => archiveProduct(p.product_id)}>ย้ายไปถังเก็บ</button>
                       ) : (
@@ -1300,17 +1321,19 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
                             <span className={`pill ${published ? 'on' : 'off'}`}>{published ? 'กำลังแสดง' : 'ถูกซ่อน'}</span>
                             <span className="name-with-badges"><strong className="product-name">{p.product_name}</strong>{p.is_archived && <span className="badge-archived">เก็บแล้ว</span>}</span>
                             <div className="subtext">
-  {skus
-    ? (skus.length ? (
-        <ol className="sku-list">{(skus || []).map((s, idx) => formatSkuLine(s)).filter(Boolean).length
-  ? (skus || []).map((s, idx) => {
-      const line = formatSkuLine(s);
-      return line ? <li key={idx}><span style={{fontWeight:600}}>{idx + 1}.</span> {line}</li> : null;
-    })
-  : null}</ol>
-      ) : 'SKU ลูก: — ไม่มี —')
-    : 'SKU ลูก: กำลังโหลด…'}
-</div>
+                              {skus
+                                ? (skus.length ? (
+                                    <ol className="sku-list">
+                                      {(skus || []).map((s, idx) => formatSkuLine(s)).filter(Boolean).length
+                                        ? (skus || []).map((s, idx) => {
+                                            const line = formatSkuLine(s);
+                                            return line ? <li key={idx}><span style={{fontWeight:600}}>{idx + 1}.</span> {line}</li> : null;
+                                          })
+                                        : null}
+                                    </ol>
+                                  ) : 'SKU ลูก: — ไม่มี —')
+                                : 'SKU ลูก: กำลังโหลด…'}
+                            </div>
                           </td>
                           <td><span className="money">{Number(p.price ?? p.selling_price ?? 0).toLocaleString()}</span></td>
                           <td><span className={stockClass}>{stock}</span></td>
@@ -1329,6 +1352,14 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
                               {published ? 'ไม่แสดง' : 'แสดง'}
                             </button>
                             <button className="btn btn-ghost btn-md" onClick={() => onEdit(p)}>แก้ไข</button>
+                            {/* ➜ ปุ่มไปหน้าแก้ไข SKU */}
+                            <Link
+                              to={`/admin/products/${p.product_id}/variants`}
+                              className="btn btn-ghost btn-md"
+                              title="ไปหน้าแก้ไข SKU ของสินค้านี้"
+                            >
+                              แก้ไข SKU
+                            </Link>
                             {!p.is_archived ? (
                               <button className="btn btn-danger btn-md" onClick={() => archiveProduct(p.product_id)}>เก็บ</button>
                             ) : (
@@ -1364,6 +1395,13 @@ setVariantsByProduct(prev => ({ ...prev, [productId]: mapped }));
             ) : (
               <button type="button" className="btn btn-primary btn-lg" onClick={()=>unarchiveProduct(currentEditingProduct.product_id)}>คืนจากคลัง</button>
             )}
+            {/* ➜ ปุ่มไปหน้าแก้ไข SKU (ล่างหน้า) */}
+          <Link to={`/admin/products/${editProductId}/variants`}
+              className="btn btn-ghost btn-lg"
+              title="ไปหน้าแก้ไข SKU ของสินค้านี้"
+            >
+              ✏️ แก้ไข SKU ของสินค้านี้
+            </Link>
           </div>
         </div>
       )}

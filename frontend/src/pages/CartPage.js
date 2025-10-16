@@ -1,12 +1,13 @@
 // src/pages/CartPage.js
 import React, { useEffect, useState } from "react";
 import "./CartPage.css";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   getCart, updateQty, removeItem, clearCart, getTotal, CART_EVENT
 } from "../lib/cart";
 
 export default function CartPage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState(getCart());
   const [total, setTotal] = useState(getTotal());
 
@@ -22,7 +23,6 @@ export default function CartPage() {
   };
 
   const onRemove = (id, variantId = null) => {
-    // ✅ แก้: ใช้ window.confirm แทน confirm
     if (window.confirm("ลบสินค้านี้ออกจากตะกร้า?")) {
       removeItem(id, variantId);
       setItems(getCart()); setTotal(getTotal());
@@ -30,7 +30,6 @@ export default function CartPage() {
   };
 
   const onClear = () => {
-    // ✅ แก้: ใช้ window.confirm แทน confirm
     if (window.confirm("ล้างตะกร้าทั้งหมด?")) {
       clearCart(); setItems([]); setTotal(0);
     }
@@ -111,7 +110,10 @@ export default function CartPage() {
             <span>ชำระทั้งหมด</span>
             <span>{total.toLocaleString()} บาท</span>
           </div>
-          <button className="btn-primary" onClick={() => alert("ไปหน้าชำระเงิน (TODO)")}>
+          <button
+            className="btn-primary"
+            onClick={() => navigate('/checkout')}
+          >
             ดำเนินการชำระเงิน →
           </button>
         </div>

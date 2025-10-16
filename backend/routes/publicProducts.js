@@ -72,9 +72,13 @@ async function buildSelectGroup({ where }) {
   const hasPriceCol     = await hasColumn('products', 'price');
   const basePriceCol    = hasSellingPrice ? 'p.selling_price' : (hasPriceCol ? 'p.price' : null);
 
+  // แหล่งราคาหลัก (จาก view ถ้ามี)
   const priceExpr = useView
     ? (hasFinal ? 'MIN(COALESCE(v.price_override, v.final_price))' : 'MIN(v.price_override)')
     : (basePriceCol ? basePriceCol : 'NULL');
+
+  // ฐาน fallback ราคา (จาก products โดยตรง ถ้ามีคอลัมน์ใดคอลัมน์หนึ่ง)
+  const fallbackBase = hasSellingPrice ? 'p.selling_price' : (hasPriceCol ? 'p.price' : 'NULL');
 
   const stockExpr = useView ? 'COALESCE(SUM(v.stock),0)::int' : '0::int';
 
@@ -82,12 +86,14 @@ async function buildSelectGroup({ where }) {
     'p.product_id',
     'p.product_name',
     'p.description',
+    // รูป: ใช้ image_url ถ้ามี ไม่งั้น cover จาก product_images
     `${hasImageUrl ? `COALESCE(NULLIF(p.image_url, ''), cv.cover_url)` : 'cv.cover_url'} AS image_url`,
     'p.category_id',
     'c.category_name',
     'p.subcategory_id',
     'sc.subcategory_name',
-    `${priceExpr}::numeric AS min_price`,
+    // ✅ ราคา: บังคับให้มีเสมอ (ถ้าไม่มีจาก view ให้ตกกลับ products หรือ 0)
+    `COALESCE(${priceExpr}, ${fallbackBase}, 0)::numeric AS min_price`,
     `${stockExpr} AS stock`,
     useView ? 'NULL::numeric AS selling_price'
             : (basePriceCol ? `${basePriceCol}::numeric AS selling_price` : 'NULL::numeric AS selling_price'),

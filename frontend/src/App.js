@@ -1,4 +1,4 @@
-// [FRONTEND] src/App.js — FIX useLocation outside Router + ProductDetail route
+// [FRONTEND] src/App.js — FIX useLocation outside Router + ProductDetail route + Checkout/Orders routes
 import React, { useEffect } from "react";
 import {
   BrowserRouter, Routes, Route, Navigate, useLocation,
@@ -25,12 +25,14 @@ import SignUp        from "./pages/SignUp";
 import Login         from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
 import HomeUser      from "./pages/HomeUser";
+import OrdersUser    from "./pages/OrdersUser";
+import CheckoutPage  from "./pages/CheckoutPage";      // ✅ added
 
 import ProductList   from "./pages/ProductList";
 import Plants        from "./pages/Plants";
 import Tools         from "./pages/Tools";
 import CartPage      from "./pages/CartPage";
-import ProductDetail from "./pages/ProductDetail";    // ✅ เพิ่ม import หน้ารายละเอียดสินค้า
+import ProductDetail from "./pages/ProductDetail";     // ✅ product detail route
 
 import { Toaster } from "react-hot-toast";
 import HeaderClassic from "./components/HeaderClassic";
@@ -121,8 +123,26 @@ function InnerApp() {
         <Route path="/plants" element={<Plants />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/products" element={<ProductList />} />
-        <Route path="/products/:id" element={<ProductDetail />} />  {/* ✅ route รายละเอียดสินค้า */}
+        <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/cart" element={<CartPage />} />
+
+        {/* ✅ Checkout & Orders (ต้องล็อกอิน) */}
+        <Route
+          path="/checkout"
+          element={
+            <RequireAuth>
+              <CheckoutPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/orders"
+          element={
+            <RequireAuth>
+              <OrdersUser />
+            </RequireAuth>
+          }
+        />
 
         <Route
           path="/account/addresses"
@@ -154,6 +174,7 @@ function InnerApp() {
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="user-management" element={<UserManagement />} />
           <Route path="products/all" element={<AllProducts />} />
+          {/* ⛔ removed: /orders for user was wrongly under /admin */}
         </Route>
 
         <Route path="/login" element={<Login />} />

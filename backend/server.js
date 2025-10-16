@@ -168,6 +168,7 @@ mount('uploads',    ['/api/uploads','/api/upload','/upload'], uploadsRoutes, req
 mount('addresses',  ['/api/addresses','/addresses'], addressesRoutes, requireAuth);
 mount('user-addresses', ['/api/user-addresses','/user-addresses'], addressesRoutes, requireAuth);
 mount('orders',     ['/api/orders','/orders'], orderRoutes, requireAuth);
+mount('orders-abs', '/', orderRoutes);
 mount('inventory',  '/api/inventory', inventoryRoutes, requireAuth);
 mount('cart',       '/api/cart', cartRoutes, requireAuth);
 mount('analytics',  '/api/analytics', analyticsRoutes, requireAuth);

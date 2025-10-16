@@ -1,4 +1,4 @@
-/* FRONTEND: src/pages/HomeUser.css  — “พร้อมวางทับ” */
+/* FRONTEND: src/pages/HomeUser.css — “พร้อมวางทับ” */
 /* -------------------------------------------------------
    Theme: PRACH MAEJO — โทนเขียวอบอุ่น คลีน อ่านง่าย
    ----------------------------------------------------- */
@@ -8,7 +8,7 @@
   /* Palette */
   --brand:#6fb36a;          /* เขียวหลัก */
   --brand-2:#82c07e;        /* เขียวรอง */
-  --brand-dark:#4c9950;     /* เขียวเข้มใช้ hover */
+  --brand-dark:#4c9950;     /* เขียวเข้มใช้ hover/focus */
   --accent:#ffd54f;         /* เหลืองนวล ใช้ badge/ไฮไลต์ */
   --text:#263321;           /* ตัวอักษรหลัก */
   --muted:#69706a;          /* ตัวอักษรรอง/รายละเอียด */
@@ -22,10 +22,13 @@
   --radius-md:12px;
   --radius-sm:10px;
   --space:16px;
+
+  /* Focus */
+  --ring: 0 0 0 3px rgba(111,179,106,.24);
 }
 
-*{box-sizing:border-box}
-img{max-width:100%;display:block}
+*{ box-sizing:border-box }
+img{ max-width:100%; display:block }
 
 .home-container{
   font-family:"Sarabun", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -35,7 +38,7 @@ img{max-width:100%;display:block}
   line-height:1.55;
 }
 
-/* ---------- Header (ถ้าหน้านี้ใช้) ---------- */
+/* ---------- Header (ถ้าใช้งาน) ---------- */
 .home-container .header{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px var(--space); border-bottom:1px solid var(--border); background:var(--card);
@@ -51,27 +54,73 @@ img{max-width:100%;display:block}
   text-align:center; padding:8px 0; background:#eef5ee; color:#557a55; letter-spacing:.2px;
 }
 
-/* ---------- Search ---------- */
-.home-container .search-box{
-  margin:18px auto; max-width:860px; display:flex; gap:10px; padding:0 var(--space);
+/* ======================================================
+   Search Bar (ใหม่) — ปุ่มค้นหาอยู่ขวา, มินิมอล ใช้ง่าย
+   ใช้กับ JSX: <form class="search-bar card"><div class="filters-row">...</div></form>
+   ====================================================== */
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  box-shadow: var(--shadow);
 }
-.home-container .search-box input{
-  flex:1; height:46px; padding:0 14px; border:1px solid var(--border); border-radius:var(--radius-md); outline:none;
-  background:var(--card); color:var(--text);
+
+.search-bar{
+  margin:18px auto;
+  max-width: 1120px;
+  padding: 12px;
+}
+.search-bar .filters-row{
+  display: grid;
+  grid-template-columns: minmax(120px,180px) minmax(160px,1fr) minmax(160px,1fr) minmax(140px,1fr) auto; /* โหมด | กล่อง1 | กล่อง2 | กล่อง3 | ปุ่ม */
+  gap: 10px;
+  align-items: end;
+}
+
+.search-bar label{
+  display:flex; flex-direction:column; gap:6px; font-size:.92rem; color:var(--muted);
+}
+.search-bar .grow{ min-width: 200px; }
+
+.search-bar select,
+.search-bar input{
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: var(--card);
+  color: var(--text);
   box-shadow: 0 1px 0 rgba(0,0,0,.02) inset;
 }
-.home-container .search-box input::placeholder{ color:#9aa19a; }
-.home-container .search-box .search-btn{
-  height:46px; padding:0 16px; border:none; border-radius:var(--radius-md);
-  background:linear-gradient(180deg, var(--brand), var(--brand-dark));
-  color:#fff; cursor:pointer; font-weight:600;
-  box-shadow: 0 3px 10px rgba(79,135,86,.25);
-  transition: transform .06s ease, filter .15s ease;
-}
-.home-container .search-box .search-btn:active{ transform: translateY(1px); }
-.home-container .search-box .search-btn:hover{ filter: brightness(1.03); }
+.search-bar input::placeholder{ color:#9aa19a; }
 
-/* ---------- Hero ---------- */
+.search-bar select:focus,
+.search-bar input:focus{
+  border-color: var(--brand-2);
+  box-shadow: var(--ring);
+}
+
+/* ปุ่มค้นหา “ชิดขวา” + ขนาดเท่าฟอร์ม */
+.btn-search{
+  height: 44px;
+  padding: 0 18px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, var(--brand), var(--brand-dark));
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing:.2px;
+  box-shadow: 0 6px 16px rgba(79,135,86,.25);
+  transition: transform .06s ease, filter .15s ease, opacity .2s ease;
+  justify-self: end;         /* ← จัดให้อยู่ขวาสุดใน grid */
+}
+.btn-search:hover{ filter: brightness(1.04); }
+.btn-search:active{ transform: translateY(1px); }
+.btn-search[disabled]{ opacity:.6; cursor: not-allowed; }
+
+/* ---------- Hero (ถ้ามี) ---------- */
 .home-container .hero{
   height: 220px;
   display:grid; place-items:center;
@@ -85,7 +134,7 @@ img{max-width:100%;display:block}
 }
 .home-container .hero .highlight{ color:var(--brand-dark); font-weight:800; }
 
-/* ---------- Categories (2 การ์ดบน) ---------- */
+/* ---------- Categories (เดิม) ---------- */
 .home-container .categories{
   max-width: 920px; margin: 0 auto 28px; padding: 0 var(--space);
   display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:18px;
@@ -98,6 +147,23 @@ img{max-width:100%;display:block}
 .home-container .category-card:hover{ transform: translateY(-3px); box-shadow:0 10px 26px rgba(40,80,50,.12); border-color:#d6e6d6; }
 .home-container .category-card img{ width:100%; height:160px; object-fit:cover; display:block; background:#eef5ef; }
 .home-container .category-card p{ margin:12px 0 14px; font-weight:700; }
+
+/* ---------- Categories Quick (ใหม่ให้เข้ากับ HomeUser.js ล่าสุด) ---------- */
+.categories-quick{ max-width:1120px; margin: 16px auto 8px; padding: 0 var(--space); }
+.cats-row{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+.cat-card{
+  display:flex; flex-direction:column; align-items:center; gap:10px;
+  background:var(--card); border:1px solid var(--border); border-radius:var(--radius-lg);
+  padding: 10px; text-decoration:none; color:inherit; box-shadow: var(--shadow);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.cat-card:hover{ transform: translateY(-2px); border-color:#d6e6d6; box-shadow:0 10px 24px rgba(40,80,50,.1); }
+.cat-card img{ width:100%; height:120px; object-fit:cover; border-radius:10px; background:#eef5ef; }
+.cat-card span{ font-weight:700; }
 
 /* ---------- Section Title ---------- */
 .home-container .best-sellers,
@@ -116,7 +182,7 @@ img{max-width:100%;display:block}
   letter-spacing:.2px;
 }
 
-/* ---------- Product Grid (ใช้ร่วมกัน) ---------- */
+/* ---------- Product Grid ---------- */
 .home-container .product-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -157,7 +223,7 @@ img{max-width:100%;display:block}
   margin: 0 0 10px;
 }
 
-/* ป้ายเล็ก (optional ใช้งานได้ทั่วไป) */
+/* ป้ายเล็ก */
 .badge{
   display:inline-block; padding:3px 8px; border-radius:999px; font-size:.78rem; font-weight:700;
   background: var(--accent); color:#664400;
@@ -190,8 +256,11 @@ img{max-width:100%;display:block}
   margin: 0 auto 14px;
   max-width: 680px;
 }
+.home-container .info-inline.warn{
+  background:#fff2f0; color:#6a2b21; border-color:#f3c6c1;
+}
 
-/* ---------- All products by category (คงไว้กรณีใช้ส่วนเดิม) ---------- */
+/* ---------- All products by category (เดิม) ---------- */
 .home-container .all-products-by-cat{
   margin: 36px auto 60px;
   max-width: 1120px;
@@ -225,11 +294,30 @@ img{max-width:100%;display:block}
 /* ---------- All products (ฟีดต่อเนื่อง) ---------- */
 .home-container .all-products{ margin: 40px auto 60px; max-width:1120px; padding: 0 var(--space); }
 
+/* ---------- Utility (รองรับ placeholder/no image) ---------- */
+.noimg{
+  width:100%; height:120px; display:grid; place-items:center;
+  background:#eef5ef; color:#7d8a7d; border-radius:10px;
+}
+
 /* ---------- Responsive ---------- */
+@media (max-width: 1024px){
+  .search-bar .filters-row{
+    grid-template-columns: minmax(120px,1fr) minmax(160px,1.2fr) minmax(160px,1fr) minmax(140px,1fr) auto;
+  }
+}
 @media (max-width: 768px){
   .home-container .hero{ height: 190px; }
   .home-container .product-card img{ height: 170px; }
   .home-container .product-grid{ gap: 16px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+
+  /* Stack แถบค้นหา */
+  .search-bar{ padding: 12px; }
+  .search-bar .filters-row{
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .btn-search{ justify-self: stretch; } /* ปุ่มเต็มแถวบนมือถือ */
 }
 @media (max-width: 560px){
   .home-container .hero{ height: 170px; margin: 6px var(--space) 14px; }

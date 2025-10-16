@@ -161,6 +161,69 @@ router.get('/products/:product_id/options', async (req, res) => {
       message: 'Failed to get options',
       ...(isDev ? { details: err.message, code: err.code } : {}),
     });
+
+/* =========================================================
+ * OPTION VALUES (flat list) for a product
+ * GET /api/variants/products/:product_id/option-values
+ * ========================================================= */
+router.get('/products/:product_id/option-values', async (req, res) => {
+  try {
+    const productId = toInt(req.params.product_id);
+    if (!Number.isInteger(productId)) return res.status(400).json({ message: 'Invalid product_id' });
+
+    const hasPO = await hasTable('product_options');
+    const hasPOV = await hasTable('product_option_values');
+    if (!hasPO || !hasPOV) return res.json([]);
+
+    const hasValuePos = await hasColumn('product_option_values', 'value_position');
+
+    const { rows } = await db.query(
+      `
+      SELECT v.value_id, v.option_id, v.value_name, ${hasValuePos ? 'v.value_position' : 'NULL::int AS value_position'}
+      FROM product_option_values v
+      JOIN product_options o ON o.option_id = v.option_id
+      WHERE o.product_id = $1
+      ORDER BY v.option_id ASC, ${hasValuePos ? 'COALESCE(v.value_position,0), v.value_id' : 'v.value_id'} ASC
+      `,
+      [productId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('GET option-values(flat) error:', err);
+    res.status(500).json({ message: 'Failed to get option values' });
+  }
+});
+
+/* =========================================================
+ * VARIANT VALUES (mapping variant_id -> option_id/value_id)
+ * GET /api/variants/products/:product_id/variant-values
+ * ========================================================= */
+router.get('/products/:product_id/variant-values', async (req, res) => {
+  try {
+    const productId = toInt(req.params.product_id);
+    if (!Number.isInteger(productId)) return res.status(400).json({ message: 'Invalid product_id' });
+
+    const hasPVV = await hasTable('product_variant_values');
+    const hasPV = await hasTable('product_variants');
+    if (!hasPV || !hasPVV) return res.json([]);
+
+    const { rows } = await db.query(
+      `
+      SELECT pvv.variant_id, pvv.option_id, pvv.value_id
+      FROM product_variant_values pvv
+      JOIN product_variants pv ON pv.variant_id = pvv.variant_id
+      WHERE pv.product_id = $1
+      ORDER BY pvv.variant_id ASC, pvv.option_id ASC
+      `,
+      [productId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('GET variant-values mapping error:', err);
+    res.status(500).json({ message: 'Failed to get variant values' });
+  }
+});
+
   }
 });
 

@@ -1,5 +1,5 @@
 // backend/db.js
-// ✅ PostgreSQL Singleton Pool + Type parsers + Query/Tx helpers (พร้อมวางทับ)
+// ✅ PostgreSQL Singleton Pool + Type parsers + Query/Tx helpers (เวอร์ชันกัน pool ปิดเร็ว)
 
 require('dotenv').config();
 const { Pool, types } = require('pg');
@@ -28,6 +28,7 @@ const cfg = {
 
 /* ---------- Singleton Pool (กันสร้างซ้ำเวลามี require หลายรอบ) ---------- */
 if (!global.__PRACHMAEJO_PGPOOL__) {
+  console.log('🌱 Creating new PostgreSQL pool...');
   global.__PRACHMAEJO_PGPOOL__ = new Pool(cfg);
 }
 const pool = global.__PRACHMAEJO_PGPOOL__;
@@ -36,13 +37,16 @@ const pool = global.__PRACHMAEJO_PGPOOL__;
 pool.on('error', err => {
   console.error('PG pool error:', err);
 });
+
 const DEBUG = /^(1|true)$/i.test(process.env.DEBUG_SQL || '');
 const SLOW_MS = parseInt(process.env.DEBUG_SQL_SLOW_MS || '250', 10);
 
 function ensureAlive() {
   if (pool.ended) {
-    // ชี้นำชัดๆ เพื่อไม่ให้ dev สับสน
-    throw new Error('PG pool was ended earlier. Please kill old process on :3001 and restart the backend.');
+    // ถ้ามี dev คนอื่น reload ซ้ำ (nodemon) แล้ว pool ถูก end → แจ้งเตือนชัดเจน
+    throw new Error(
+      '❌ PG pool was ended earlier. Please kill old process on :3001 and restart backend.'
+    );
   }
 }
 
@@ -63,10 +67,17 @@ async function getClient() {
   ensureAlive();
   const client = await pool.connect();
   if (process.env.PG_STATEMENT_TIMEOUT_MS) {
-    await client.query(`SET statement_timeout = ${parseInt(process.env.PG_STATEMENT_TIMEOUT_MS, 10)}`);
+    await client.query(
+      `SET statement_timeout = ${parseInt(process.env.PG_STATEMENT_TIMEOUT_MS, 10)}`
+    );
   }
   if (process.env.PG_IDLE_IN_TX_TIMEOUT_MS) {
-    await client.query(`SET idle_in_transaction_session_timeout = ${parseInt(process.env.PG_IDLE_IN_TX_TIMEOUT_MS, 10)}`);
+    await client.query(
+      `SET idle_in_transaction_session_timeout = ${parseInt(
+        process.env.PG_IDLE_IN_TX_TIMEOUT_MS,
+        10
+      )}`
+    );
   }
   return client;
 }
@@ -79,34 +90,49 @@ async function runTx(fn) {
     await client.query('COMMIT');
     return result;
   } catch (e) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
     throw e;
   } finally {
     client.release();
   }
 }
 
-/* ---------- Graceful close (สมัครแค่ครั้งเดียว) ---------- */
+/* ---------- Graceful close (เวอร์ชันกัน nodemon ปิด pool) ---------- */
 if (!global.__PRACHMAEJO_PGPOOL_SIG__) {
   global.__PRACHMAEJO_PGPOOL_SIG__ = true;
 
   async function closePool() {
     if (!pool.ended) {
-      await pool.end();
+      console.log('🧹 Closing PostgreSQL pool...');
+      try {
+        await pool.end();
+      } catch (err) {
+        console.warn('⚠️ Error while closing pool:', err.message);
+      }
     }
   }
 
-  for (const sig of ['SIGINT', 'SIGTERM']) {
-    process.on(sig, async () => {
-      try { await closePool(); } finally { process.exit(0); }
-    });
+  // ปิดเฉพาะตอน production (ไม่ปิดตอน dev/nodemon reload)
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (!isDev) {
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+      process.on(sig, async () => {
+        try {
+          await closePool();
+        } finally {
+          process.exit(0);
+        }
+      });
+    }
   }
 
   module.exports.closePool = closePool;
 }
 
 /* ---------- Exports ---------- */
-module.exports.query     = query;
+module.exports.query = query;
 module.exports.getClient = getClient;
-module.exports.runTx     = runTx;
-module.exports.pool      = pool;
+module.exports.runTx = runTx;
+module.exports.pool = pool;
