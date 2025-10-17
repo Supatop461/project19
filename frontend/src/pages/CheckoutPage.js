@@ -4,7 +4,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import axios from 'axios';
+import { api as axios } from '../lib/api';
 import { getCart, getTotal, clearCart, updateQty, removeItem } from '../lib/cart';
 
 function formatBaht(n) {
@@ -76,17 +76,17 @@ export default function CheckoutPage() {
   const [slip, setSlip] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // โหลด "ที่อยู่ของฉัน" จาก API เดิม (มี /api/user-addresses; fallback /api/addresses)
+  // โหลด "ที่อยู่ของฉัน" จาก API เดิม (มี /user-addresses; fallback /addresses)
   useEffect(() => {
     (async () => {
       try {
         setLoadingAddr(true);
         let data = [];
         try {
-          const r1 = await axios.get('/api/user-addresses');
+          const r1 = await axios.get('/user-addresses');
           data = Array.isArray(r1.data) ? r1.data : (r1.data?.items || []);
         } catch {
-          const r2 = await axios.get('/api/addresses');
+          const r2 = await axios.get('/addresses');
           data = Array.isArray(r2.data) ? r2.data : (r2.data?.items || []);
         }
         const list = (data || []).map(normalizeAddr).filter(Boolean);
@@ -137,7 +137,7 @@ export default function CheckoutPage() {
   async function persistAddressChanges() {
     try {
       if (saveBack && selectedId && selectedId !== 'new') {
-        await axios.put(`/api/addresses/${selectedId}`, {
+        await axios.put(`/addresses/${selectedId}`, {
           fullname: address.fullname,
           phone: address.phone,
           line1: address.line1,
@@ -148,7 +148,7 @@ export default function CheckoutPage() {
         }).catch(() => {});
       }
       if (saveAsNew) {
-        await axios.post(`/api/addresses`, {
+        await axios.post(`/addresses`, {
           fullname: address.fullname,
           phone: address.phone,
           line1: address.line1,
@@ -181,7 +181,7 @@ export default function CheckoutPage() {
       }));
 
       // 1) create order (pending) — ส่งค่าส่งที่คำนวณแล้ว
-      const { data: order } = await axios.post('/api/orders', {
+      const { data: order } = await axios.post('/orders', {
         address,
         items,
         shipping_fee: Number(shippingFee) || 0,
@@ -191,7 +191,7 @@ export default function CheckoutPage() {
       if (slip) {
         const fd = new FormData();
         fd.append('slip', slip);
-        await axios.post(`/api/orders/${order.order_id}/slip`, fd, {
+        await axios.post(`/orders/${order.order_id}/slip`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
       }

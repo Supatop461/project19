@@ -1,7 +1,7 @@
 // src/account/Addresses.js
 // จัดการที่อยู่ผู้ใช้ (CRUD + default) — พรีฟิลจากตอนสมัครสมาชิกถ้ายังไม่มีที่อยู่
 import React, { useEffect, useMemo, useState } from 'react';
-import axios from 'axios'; //
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import ThaiAddressPicker from '../components/ThaiAddressPicker';
 
@@ -49,10 +49,38 @@ export default function Addresses() {
     is_default: false,
   });
 
-  /* ------------------------- FIX: ใช้ axiosClient ที่ใส่ Authorization เสมอ ------------------------- */
+  /* ------------------------- FIX เล็กๆ: axiosClient รองรับหลาย token key + เดา baseURL อัตโนมัติ ------------------------- */
   const axiosClient = useMemo(() => {
-    const token = localStorage.getItem('token') || '';
-    const base  = axios.defaults.baseURL || process.env.REACT_APP_API_BASE || 'http://localhost:3001';
+    // รองรับชื่อ key ที่ทีมอื่นๆ อาจใช้
+    const token =
+      localStorage.getItem('token') ||
+      localStorage.getItem('access_token') ||
+      localStorage.getItem('jwt') ||
+      '';
+
+    // ลำดับการเดา baseURL:
+    // 1) .env: REACT_APP_API_BASE
+    // 2) ใช้ origin ตอนนี้แล้วแทนพอร์ตเป็น 3001 (สำหรับ dev)
+    // 3) ค่าเดิมใน axios.defaults.baseURL
+    // 4) 'http://localhost:3001'
+    const envBase = process.env.REACT_APP_API_BASE;
+    const guessFromOrigin = (() => {
+      try {
+        const u = new URL(window.location.href);
+        // ถ้า dev บน 3000 ให้เดาเป็น 3001
+        const port = u.port === '3000' ? '3001' : (u.port || '3001');
+        return `${u.protocol}//${u.hostname}:${port}`;
+      } catch {
+        return null;
+      }
+    })();
+
+    const base =
+      envBase ||
+      guessFromOrigin ||
+      axios.defaults.baseURL ||
+      'http://localhost:3001';
+
     return axios.create({
       baseURL: base, // เรียกด้วย path /api/...
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -64,16 +92,15 @@ export default function Addresses() {
   async function fetchList() {
     setLoading(true);
     try {
-      const res = await axiosClient.get('/api/addresses/me'); //
-    
+      const res = await axiosClient.get('/api/addresses/me');
       const data = Array.isArray(res.data?.items) ? res.data.items : res.data;
-      // ถ้ามี flag is_default ให้เรียง default ขึ้นก่อน
       const sorted = Array.isArray(data)
         ? [...data].sort((a, b) => Number(b?.is_default) - Number(a?.is_default))
         : [];
       setRows(sorted);
       return sorted;
     } catch (e) {
+      console.error('fetch addresses error:', e);
       alert(e?.response?.data?.error || 'ดึงรายการไม่สำเร็จ');
       return [];
     } finally {
@@ -84,7 +111,6 @@ export default function Addresses() {
   /* ------------------------- พรีฟิลจากข้อมูลตอนสมัคร ------------------------- */
   async function tryPrefillFromSignup() {
     try {
-      /* FIX: เรียกเฉพาะ endpoint ที่มีจริง เพื่อตัด 404 เกินจำเป็น */
       const endpoints = ['/api/me'];
       let me = null;
       for (const url of endpoints) {

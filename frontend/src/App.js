@@ -13,12 +13,16 @@ import Dashboard         from "./admin/Dashboard";
 import ProductEditPage   from "./admin/ProductEditPage";
 import InventoryPage     from "./admin/InventoryPage";
 import AllProducts       from "./admin/AllProducts";
+import ProductDetailAdmin from "./admin/ProductDetailAdmin";
+
+
 
 import AdminCategories    from "./admin/AdminCategories";
 import AdminSubcategories from "./admin/AdminSubcategories";
 import AdminUnits         from "./admin/AdminUnits";
 import AdminSizes         from "./admin/AdminSizes";
 import UserManagement     from "./admin/UserManagement";
+
 
 import Addresses     from "./account/Addresses";
 import SignUp        from "./pages/SignUp";
@@ -153,7 +157,7 @@ function InnerApp() {
           }
         />
 
-        <Route
+                <Route
           path="/admin"
           element={
             <RequireAdmin>
@@ -162,10 +166,16 @@ function InnerApp() {
           }
         >
           <Route index element={<Dashboard />} />
+
+          {/* ✅ ต้องวางไว้ก่อน products/:id */}
+          <Route path="products/detail/:id" element={<ProductDetailAdmin />} />
+
           <Route path="products" element={<ProductManagement />} />
           <Route path="products/:id" element={<ProductEditPage />} />
           <Route path="products/:productId/variants" element={<VariantsManager />} />
-          <Route path="products/:id/variants"        element={<VariantsManager />} />
+          <Route path="products/:id/variants" element={<VariantsManager />} />
+          <Route path="products/all" element={<AllProducts />} />
+
           <Route path="orders" element={<OrderManagement />} />
           <Route path="categories" element={<AdminCategories />} />
           <Route path="subcategories" element={<AdminSubcategories />} />
@@ -173,9 +183,8 @@ function InnerApp() {
           <Route path="sizes" element={<AdminSizes />} />
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="user-management" element={<UserManagement />} />
-          <Route path="products/all" element={<AllProducts />} />
-          {/* ⛔ removed: /orders for user was wrongly under /admin */}
         </Route>
+
 
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />

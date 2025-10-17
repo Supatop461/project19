@@ -303,4 +303,121 @@ router.get('/:productId', async (req, res) => {
   }
 });
 
+/* ======================================================================
+ * [NEW] GET /api/products/:id/variants — แก้ 404 ฝั่ง public
+ * ==================================================================== */
+router.get('/products/:id/variants', async (req, res) => {
+  const id = parseInt(req.params.id,10);
+  if (!Number.isFinite(id)) return res.status(400).json({ ok:false, error:'Invalid product id' });
+  try {
+    const { rows: vChk } = await db.query(
+      `SELECT to_regclass('public.v_product_variants_live_stock') IS NOT NULL AS ok`
+    );
+    const hasView = !!vChk[0]?.ok;
+    if (hasView) {
+      // ตรวจคีย์ในวิวแบบ dynamic
+      const keys = ['variant_id','product_variant_id','pv_id','id'];
+      let vKey = 'variant_id';
+      for (const k of keys) {
+        const { rows } = await db.query(`
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='v_product_variants_live_stock' AND column_name=$1 LIMIT 1
+        `,[k]);
+        if (rows.length){ vKey = k; break; }
+      }
+      const { rows } = await db.query(`
+        SELECT
+          ${vKey} AS variant_id,
+          product_id,
+          sku,
+          COALESCE(price_override,0)::numeric AS price,
+          COALESCE(stock,0)::int AS stock
+        FROM v_product_variants_live_stock
+        WHERE product_id = $1
+        ORDER BY ${vKey} ASC
+      `, [id]);
+      return res.json({ ok:true, variants: rows });
+    } else {
+      const { rows } = await db.query(`
+        SELECT variant_id AS variant_id, product_id, sku,
+               COALESCE(price_override,0)::numeric AS price,
+               COALESCE(stock,0)::int AS stock
+        FROM product_variants
+        WHERE product_id = $1
+        ORDER BY variant_id ASC
+      `, [id]);
+      return res.json({ ok:true, variants: rows });
+    }
+  } catch (e) {
+    console.error('GET /api/products/:id/variants error', e);
+    res.status(500).json({ ok:false, error:'Server error' });
+  }
+});
+
 module.exports = router;
+
+
+/* ======================================================================
+ * [FIX] GET /api/products/:id/variants — correct mount path
+ *  - This router is mounted at /api/products, so the route here must be '/:id/variants'
+ *  - Uses live view if available; falls back to product_variants if view missing or returns 0 rows
+ * ==================================================================== */
+router.get('/:id/variants', async (req, res) => {
+  const id = parseInt(req.params.id,10);
+  if (!Number.isFinite(id)) return res.status(400).json({ ok:false, error:'Invalid product id' });
+  try {
+    const chk = await db.query(`SELECT to_regclass('public.v_product_variants_live_stock') IS NOT NULL AS ok`);
+    const hasView = !!chk.rows[0]?.ok;
+
+    async function selectFromTable() {
+      const r = await db.query(`
+        SELECT variant_id AS variant_id, product_id, sku,
+               COALESCE(price_override,0)::numeric AS price,
+               COALESCE(stock,0)::int AS stock,
+               COALESCE(is_active, TRUE) AS is_active,
+               COALESCE(image_url, '')  AS image_url
+        FROM product_variants
+        WHERE product_id = $1
+        ORDER BY variant_id ASC
+      `, [id]);
+      return r.rows;
+    }
+
+    if (hasView) {
+      // detect key
+      const keys = ['variant_id','product_variant_id','pv_id','id'];
+      let vKey = 'variant_id';
+      for (const k of keys) {
+        const r = await db.query(`
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='v_product_variants_live_stock' AND column_name=$1 LIMIT 1
+        `,[k]);
+        if (r.rows.length){ vKey = k; break; }
+      }
+      let r = await db.query(`
+        SELECT
+          ${vKey} AS variant_id,
+          product_id,
+          sku,
+          COALESCE(price_override,0)::numeric AS price,
+          COALESCE(stock,0)::int AS stock,
+          COALESCE(is_active, TRUE) AS is_active,
+          COALESCE(image_url, '')  AS image_url
+        FROM v_product_variants_live_stock
+        WHERE product_id = $1
+        ORDER BY ${vKey} ASC
+      `, [id]);
+      let rows = r.rows || [];
+      if (!rows.length) {
+        rows = await selectFromTable();
+      }
+      return res.json({ ok:true, variants: rows });
+    } else {
+      const rows = await selectFromTable();
+      return res.json({ ok:true, variants: rows });
+    }
+  } catch (e) {
+    console.error('GET /api/products/:id/variants error(fix)', e);
+    res.status(500).json({ ok:false, error:'Server error' });
+  }
+});

@@ -1,78 +1,133 @@
-// src/pages/Plants.js
-import React, { useEffect, useMemo, useState } from "react";
+// src/pages/Tools.js
+import React, { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import axios from "axios";
-import "./Plants.css";
+import "./Tools.css";
 
-/** category_id ของหมวดหลัก "ต้นไม้" */
-const PLANTS_CATEGORY_ID = "ro1";
+// ใช้ตัวช่วยเรียก API กลางของโปรเจกต์ (มีแนบ token ให้อัตโนมัติ)
+import { api, mediaSrc } from "../lib/api";
 
-/** ทำ URL รูปให้ absolute (ตัด /api ออกให้เอง) */
-const apiBase = axios.defaults.baseURL || process.env.REACT_APP_API_BASE || "http://localhost:3001/api";
-const originBase = (() => {
-  try {
-    const u = new URL(apiBase);
-    return u.origin + (u.pathname.replace(/\/api\/?$/, "") || "");
-  } catch {
-    return "http://localhost:3001";
-  }
-})();
-const resolveUrl = (u) => {
-  if (!u) return "";
-  const s = String(u);
-  if (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("blob:")) return s;
-  if (s.startsWith("/")) return `${originBase}${s}`;
-  return s;
-};
+export default function Tools() {
+  // รหัสหมวดหลัก "อุปกรณ์เพาะปลูก" ในระบบ (เคยใช้คำว่า tools)
+  const ROOT_CODE = "tools";
 
-export default function Plants() {
-  const [cats, setCats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [rootCat, setRootCat] = useState(null);       // หมวดหลัก (อุปกรณ์)
+  const [subcats, setSubcats] = useState([]);         // หมวดย่อยจากฐานข้อมูล
 
-  /** รูปสำรองตาม id (เผื่อยังไม่มีรูปใน DB) */
-  const fallbackImages = useMemo(
-    () => ({
-      po1: process.env.PUBLIC_URL + "/lamyai.jpg",     // ไม้ผล
-      po2: process.env.PUBLIC_URL + "/tonmai.jpg",     // ไม้ดอก/ประดับ
-      po3: process.env.PUBLIC_URL + "/p2.png",         // ไม้เศรษฐกิจ
-      po4: process.env.PUBLIC_URL + "/payanaka1.jpg",  // ไม้สมุนไพร
-    }),
-    []
-  );
+  // แปลงรูปภาพจาก path ใน DB -> URL เสิร์ฟจาก backend (/uploads/...)
+  const imgOrFallback = (row) => {
+    const src =
+      row?.image_url ||
+      row?.icon_url ||
+      row?.thumbnail_url ||
+      row?.thumb_url ||
+      "";
+    const url = mediaSrc ? mediaSrc(src) : src;
+    return url && String(url).trim()
+      ? url
+      : process.env.PUBLIC_URL + "/logo.png";
+  };
 
-  // ปลายทางเมื่อคลิกหมวดย่อย → ไปหน้ารวมสินค้าของหมวดต้นไม้ + ระบุ subcategory
-  const buildLink = (slug) =>
-    `/products?category=${encodeURIComponent("plants")}&subcategory=${encodeURIComponent(slug)}`;
+  // ลิงก์ไปยังหน้ารายการสินค้า ตามหมวดย่อย
+  const buildLink = (s) =>
+    `/products?category=${encodeURIComponent(ROOT_CODE)}&sub=${encodeURIComponent(s)}`;
 
   useEffect(() => {
-    let off = false;
-    (async () => {
+    let isMounted = true;
+
+    async function fetchAll() {
       setLoading(true);
       setErr("");
       try {
-        // ✅ ใช้ /api/lookups (มีจริง) แล้วกรอง subcategories ตาม ro1
-        const r = await axios.get("/api/lookups", { params: { published: 1, _: Date.now() } });
-        const subs = Array.isArray(r?.data?.subcategories) ? r.data.subcategories : [];
-        const rows = subs
-          .filter((x) => String(x.category_id) === PLANTS_CATEGORY_ID)
-          .map((x) => ({
-            slug: String(x.subcategory_id),
-            name: String(x.subcategory_name || "-"),
-            desc: "",
-            img: resolveUrl(x.image_url || ""),
-          }));
-        if (!off) setCats(rows);
+        // 1) หา "อุปกรณ์" (root category) จาก DB
+        //    พยายามหลายรูปแบบ เพื่อรองรับสคีมาที่ต่างกัน
+        const tryGetRoot = async () => {
+          // a) /api/categories?code=tools
+          let { data } = await api.get("/categories", { params: { code: ROOT_CODE } });
+          if (Array.isArray(data) && data.length) return data[0];
+
+          // b) /api/categories?slug=tools
+          ({ data } = await api.get("/categories", { params: { slug: ROOT_CODE } }));
+          if (Array.isArray(data) && data.length) return data[0];
+
+          // c) /api/categories?name=อุปกรณ์เพาะปลูก
+          ({ data } = await api.get("/categories", { params: { name: "อุปกรณ์เพาะปลูก" } }));
+          if (Array.isArray(data) && data.length) return data[0];
+
+          // d) ถ้าดึงไม่ได้จริง ๆ ให้โยน error เพื่อให้ขึ้นข้อความว่าง
+          throw new Error("ไม่พบหมวดหลัก 'อุปกรณ์เพาะปลูก'");
+        };
+
+        const root = await tryGetRoot();
+
+        // 2) ดึงหมวดย่อยของ root
+        const tryGetSubcats = async () => {
+          // A) /api/subcategories?category_id=ID
+          let { data } = await api.get("/subcategories", { params: { category_id: root.id || root.category_id } });
+          if (Array.isArray(data) && data.length) return data;
+
+          // B) /api/categories/:id/subcategories
+          try {
+            ({ data } = await api.get(`/categories/${root.id || root.category_id}/subcategories`));
+            if (Array.isArray(data) && data.length) return data;
+          } catch {}
+
+          // C) /api/subcategories?category=tools
+          ({ data } = await api.get("/subcategories", { params: { category: ROOT_CODE } }));
+          if (Array.isArray(data) && data.length) return data;
+
+          // D) เผื่อบางสคีมาเก็บ subcat ปนใน categories (parent_id)
+          ({ data } = await api.get("/categories", { params: { parent_id: root.id || root.category_id } }));
+          if (Array.isArray(data) && data.length) return data;
+
+          return [];
+        };
+
+        const subs = await tryGetSubcats();
+
+        if (!isMounted) return;
+
+        setRootCat(root);
+        // ทำให้มี key สำคัญครบ: slug/code/id/name และรูปภาพ
+        const normalized = subs.map((s) => ({
+          id: s.id ?? s.subcategory_id ?? s.category_id ?? s.code ?? s.slug ?? s.name,
+          slug: s.slug ?? s.code ?? String(s.id ?? s.subcategory_id ?? s.category_id ?? "").toLowerCase(),
+          name: s.name ?? s.subcategory_name ?? s.category_name ?? "",
+          img: imgOrFallback(s),
+        }));
+
+        // กันซ้ำตาม id/slug
+        const uniq = [];
+        const seen = new Set();
+        for (const x of normalized) {
+          const k = String(x.id ?? x.slug);
+          if (!seen.has(k)) {
+            uniq.push(x);
+            seen.add(k);
+          }
+        }
+
+        setSubcats(uniq);
+        setLoading(false);
       } catch (e) {
-        if (!off) setErr(e?.response?.data?.message || e.message || "โหลดหมวดย่อยไม่สำเร็จ");
-      } finally {
-        if (!off) setLoading(false);
+        if (!isMounted) return;
+        setErr(e?.message || "โหลดข้อมูลไม่สำเร็จ");
+        setLoading(false);
       }
-    })();
-    return () => { off = true; };
+    }
+
+    fetchAll();
+    return () => { isMounted = false; };
   }, []);
 
-  const placeholders = useMemo(() => Array.from({ length: 4 }), []);
+  const title = useMemo(() => {
+    const nm =
+      rootCat?.name ||
+      rootCat?.category_name ||
+      "อุปกรณ์เพาะปลูก";
+    return nm;
+  }, [rootCat]);
 
   return (
     <div className="plants-page">
@@ -80,58 +135,52 @@ export default function Plants() {
       <nav className="breadcrumb">
         <Link to="/" className="crumb">หน้าแรก</Link>
         <span className="sep">›</span>
-        <span className="crumb current">ต้นไม้</span>
+        <span className="crumb current">{title}</span>
       </nav>
-
-      {/* ปุ่มกลับหน้าแรก */}
-      <div className="topbar">
-        <Link to="/" className="back-btn" aria-label="กลับหน้าแรก">
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" className="back-icon">
-            <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          กลับหน้าแรก
-        </Link>
-      </div>
 
       {/* hero */}
       <header className="plants-hero">
-        <h1>เลือกหมวดย่อยของ <span className="hl">ต้นไม้</span></h1>
-        <p className="sub">เลือกประเภทที่ต้องการ เพื่อดูรายการสินค้าเฉพาะหมวดนั้น ๆ</p>
+        <h1>เลือกหมวดย่อยของ <span className="hl">{title}</span></h1>
+        <p className="sub">เลือกหมวดอุปกรณ์เพื่อดูรายการสินค้าที่เกี่ยวข้อง</p>
       </header>
 
-      {err && <div className="note-error">{err}</div>}
+      {/* states */}
+      {loading && <p style={{ opacity: 0.7 }}>กำลังโหลดหมวดหมู่ย่อย...</p>}
+      {!loading && err && (
+        <p style={{ color: "#ef4444" }}>
+          ไม่สามารถโหลดหมวดหมู่ได้: {err}
+        </p>
+      )}
+      {!loading && !err && subcats.length === 0 && (
+        <p style={{ opacity: 0.7 }}>
+          ยังไม่มีหมวดหมู่ย่อยสำหรับ “{title}”
+        </p>
+      )}
 
-      {/* cards/grid */}
-      <section className="plants-categories">
-        {loading
-          ? placeholders.map((_, i) => (
-              <div className="plant-card skel" key={`skel-${i}`}>
-                <div className="thumb shine" />
-                <div className="meta">
-                  <div className="line shine" style={{ width: "60%", height: 16 }} />
-                  <div className="line shine" style={{ width: "80%", height: 12, marginTop: 6 }} />
-                </div>
+      {/* cards */}
+      {!loading && !err && subcats.length > 0 && (
+        <section className="plants-categories">
+          {subcats.map((c) => (
+            <Link
+              key={c.id || c.slug}
+              to={buildLink(c.slug)}
+              className="plant-card"
+              aria-label={c.name}
+            >
+              <div className="thumb">
+                <img
+                  src={c.img}
+                  alt={c.name}
+                  onError={(e) => (e.currentTarget.src = process.env.PUBLIC_URL + "/logo.png")}
+                />
               </div>
-            ))
-          : cats.map((c) => {
-              const imgSrc = c.img || fallbackImages[c.slug] || (process.env.PUBLIC_URL + "/placeholder.jpg");
-              return (
-                <Link to={buildLink(c.slug)} className="plant-card" key={c.slug} aria-label={c.name}>
-                  <div className="thumb">
-                    <img
-                      src={imgSrc}
-                      alt={c.name}
-                      onError={(e) => (e.currentTarget.src = process.env.PUBLIC_URL + "/logo.png")}
-                    />
-                  </div>
-                  <div className="meta">
-                    <p className="p-name">{c.name}</p>
-                    <p className="p-desc">{c.desc}</p>
-                  </div>
-                </Link>
-              );
-            })}
-      </section>
+              <div className="meta">
+                <p className="p-name">{c.name}</p>
+              </div>
+            </Link>
+          ))}
+        </section>
+      )}
     </div>
   );
 }

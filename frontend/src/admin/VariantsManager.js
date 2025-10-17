@@ -107,13 +107,15 @@ const firstNonEmpty = (...xs) => xs.find((x) => x !== undefined && x !== null &&
 /* ---------- Variant normalize (base) ---------- */
 const normVariantBase = (v) => {
   if (!v) return null;
-  const price = v.price ?? v.unit_price ?? v.sale_price ?? v.price_override ?? "";
+  const priceRaw = v.final_price ?? v.price ?? v.unit_price ?? v.sale_price ?? v.price_override ?? "";
+  const stockRaw = v.stock ?? v.stock_qty ?? v.quantity ?? 0;
   const sku = firstNonEmpty(v.sku, v.SKU, v.code);
   const image = firstNonEmpty(v.image_url, v.image, v.imageUrl, v.variant_image);
   return {
     variant_id: v.variant_id ?? v.id ?? v.product_variant_id ?? null,
     sku,
-    price: typeof price === "number" ? String(price) : String(price || ""),
+    price: typeof priceRaw === "number" ? String(priceRaw) : String(priceRaw || ""),
+    stock: Number(stockRaw) || 0,
     image: image || null,
     option_text: firstNonEmpty(v.option_text, v.options_text, ""),
     combo: Array.isArray(v.combo) ? v.combo : [], // keep for fallback
@@ -170,7 +172,7 @@ export default function VariantsManager() {
     let variants = [];
     let variantsRaw = [];
     const endpoints = [
-      path(`/api/variants/product/${productId}`),
+      path(`/api/variants/product/${productId}?active=0`),
       path(`/api/variants/by-product/${productId}`),
       path(`/api/variants?product_id=${productId}`),
       path(`/admin/products/${productId}/variants`),
@@ -306,7 +308,8 @@ export default function VariantsManager() {
         opt2: obj.opt2 || "",
         opt3: obj.opt3 || "",
         price: obj.price ?? "",
-        sku: obj.sku || "",
+        
+        stock: Number(obj.stock ?? 0),sku: obj.sku || "",
         image: obj.image || null,
         opt1_name: opt1Name, opt2_name: opt2Name, opt3_name: opt3Name,
       };
@@ -338,7 +341,8 @@ export default function VariantsManager() {
     const next = [];
     for (const [k, want] of should.entries()) {
       if (cur.has(k)) next.push({ ...cur.get(k) });
-      else next.push({ __existing:false, variant_id:null, opt1:want.opt1, opt2:want.opt2, opt3:want.opt3, price:"", sku:"", image:null, opt1_name:opt1Name, opt2_name:opt2Name, opt3_name:opt3Name });
+      else next.push({ __existing:false, variant_id:null, opt1:want.opt1, opt2:want.opt2, opt3:want.opt3, price:"", stock: 0,
+          sku:"", image:null, opt1_name:opt1Name, opt2_name:opt2Name, opt3_name:opt3Name });
     }
     setRows(next);
   }, [rows, opt1Values, opt2Values, opt3Values, opt1Name, opt2Name, opt3Name]);
@@ -403,6 +407,7 @@ export default function VariantsManager() {
         sku: r.sku || null,
         price: r.price !== "" ? Number(r.price) : null,
         image_url: r.image || null,
+        stock: (r.stock != null ? Number(r.stock) : null),
       }));
 
       if (deletedIds.length) {
@@ -419,8 +424,17 @@ export default function VariantsManager() {
 
       setMsg("✅ บันทึกแล้ว");
       setTimeout(() => setMsg(""), 1800);
-      await loadAll();
-    } catch (e) {
+        // try to update stocks in a single shot (best-effort)
+  try {
+    const stockItems = rows
+      .filter(r => r.variant_id && r.stock != null)
+      .map(r => ({ variant_id: r.variant_id, stock: Number(r.stock) || 0 }));
+    if (stockItems.length) {
+      await api.post(path(`/api/variants/update-stocks`), { items: stockItems }, { headers: authHeader() });
+    }
+  } catch {}
+  await loadAll();
+} catch (e) {
       console.error(e);
       alert(e?.response?.data?.message || "❌ Save failed");
     } finally { setSaving(false); }
@@ -483,6 +497,7 @@ export default function VariantsManager() {
               <th>{opt2Name || "ตัวเลือก 2"}</th>
               <th>{opt3Name || "ตัวเลือก 3"}</th>
               <th>ราคา</th>
+              <th>คงเหลือ</th>
               <th>SKU</th>
               <th>ลบ</th>
             </tr>
@@ -509,6 +524,18 @@ export default function VariantsManager() {
                     setRows((prev) => { const a = [...prev]; a[i] = { ...a[i], price: v }; return a; });
                   }} />
                 </td>
+<td>
+  <input
+    type="number"
+    min="0"
+    step="1"
+    value={r.stock ?? 0}
+    onChange={(e) => {
+      const v = e.target.value;
+      setRows((prev) => { const a = [...prev]; a[i] = { ...a[i], stock: v === "" ? 0 : Math.max(0, Number(v)) }; return a; });
+    }}
+  />
+</td>
                 <td>
                   <input placeholder="SKU" value={r.sku} onChange={(e) => {
                     const v = e.target.value;

@@ -107,11 +107,13 @@ async function pickProductBasePriceParts() {
 /* -------------------- debug -------------------- */
 router.get('/_ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
+
 /* =========================================================
  * OPTIONS & VALUES (READ)
- * GET /api/variants/products/:product_id/options
+ * GET /api/variants/products/:product_id/options          (alias)
+ * GET /api/products/:product_id/options                   (base)
  * ========================================================= */
-router.get('/products/:product_id/options', async (req, res) => {
+router.get(['/products/:product_id/options','/variants/products/:product_id/options'], async (req, res) => {
   try {
     const productId = toInt(req.params.product_id);
     if (!Number.isInteger(productId)) {
@@ -161,12 +163,15 @@ router.get('/products/:product_id/options', async (req, res) => {
       message: 'Failed to get options',
       ...(isDev ? { details: err.message, code: err.code } : {}),
     });
+  }
+});
 
 /* =========================================================
  * OPTION VALUES (flat list) for a product
- * GET /api/variants/products/:product_id/option-values
+ * GET /api/variants/products/:product_id/option-values    (alias)
+ * GET /api/products/:product_id/option-values             (base)
  * ========================================================= */
-router.get('/products/:product_id/option-values', async (req, res) => {
+router.get(['/products/:product_id/option-values','/variants/products/:product_id/option-values'], async (req, res) => {
   try {
     const productId = toInt(req.params.product_id);
     if (!Number.isInteger(productId)) return res.status(400).json({ message: 'Invalid product_id' });
@@ -196,9 +201,10 @@ router.get('/products/:product_id/option-values', async (req, res) => {
 
 /* =========================================================
  * VARIANT VALUES (mapping variant_id -> option_id/value_id)
- * GET /api/variants/products/:product_id/variant-values
+ * GET /api/variants/products/:product_id/variant-values   (alias)
+ * GET /api/products/:product_id/variant-values            (base)
  * ========================================================= */
-router.get('/products/:product_id/variant-values', async (req, res) => {
+router.get(['/products/:product_id/variant-values','/variants/products/:product_id/variant-values'], async (req, res) => {
   try {
     const productId = toInt(req.params.product_id);
     if (!Number.isInteger(productId)) return res.status(400).json({ message: 'Invalid product_id' });
@@ -223,10 +229,6 @@ router.get('/products/:product_id/variant-values', async (req, res) => {
     res.status(500).json({ message: 'Failed to get variant values' });
   }
 });
-
-  }
-});
-
 /* =========================================================
  * OPTIONS & VALUES (WRITE) — admin only
  * ========================================================= */
@@ -435,7 +437,7 @@ router.delete('/values/:value_id', ...mustAdmin, async (req, res) => {
  * VARIANTS (READ) — ใช้ VIEW live stock เป็นทางหลัก
  * GET /api/variants/product/:id?active=1
  * ========================================================= */
-router.get('/product/:id', async (req, res) => {
+router.get(['/product/:id','/variants/product/:id'], async (req, res) => {
   try {
     const productId = toInt(req.params.id);
     if (!Number.isInteger(productId)) return res.status(400).json({ error: 'Invalid product id' });
@@ -496,7 +498,17 @@ router.get('/product/:id', async (req, res) => {
 
     // (3) fallback: ตารางจริง
     const { stockCol, priceCol, activeCol, imageCol } = await pickVariantCols();
-    const stockExpr = stockCol ? `v.${stockCol}` : `0`;
+    // ถ้าไม่มีคอลัมน์ stock_* ในตาราง ให้ลองรวมจาก inventory_moves เป็นสต็อกปัจจุบัน
+    let stockExpr = stockCol ? `v.${stockCol}` : null;
+    let invJoin = '';
+    if (!stockExpr && (await hasTable('inventory_moves'))) {
+      invJoin = `LEFT JOIN (
+        SELECT variant_id, SUM(CASE WHEN move_type='in' THEN qty WHEN move_type='out' THEN -qty ELSE COALESCE(qty,0) END) AS mv_stock
+        FROM inventory_moves GROUP BY variant_id
+      ) mv ON mv.variant_id = v.variant_id`;
+      stockExpr = 'COALESCE(mv.mv_stock,0)';
+    }
+    if (!stockExpr) stockExpr = '0';
     const finalPriceExpr = priceCol ? `v.${priceCol}` : baseExpr;
     const isActiveExpr = activeCol ? `v.${activeCol}` : `TRUE`;
 
@@ -518,7 +530,7 @@ router.get('/product/:id', async (req, res) => {
           ) FILTER (WHERE pvv.option_id IS NOT NULL),
           '[]'
         ) AS combo
-      FROM product_variants v
+      FROM product_variants v ${invJoin}
       JOIN products p ON p.product_id = v.product_id
       LEFT JOIN product_variant_values pvv ON pvv.variant_id = v.variant_id
       WHERE v.product_id = $1
@@ -1245,7 +1257,7 @@ async function queryAliasItems(productId) {
 }
 
 // GET /api/variants/by-product/:productId
-router.get('/by-product/:productId', ...mustAdmin, async (req, res) => {
+router.get(['/by-product/:productId','/variants/by-product/:productId'], ...mustAdmin, async (req, res) => {
   const productId = parseInt(req.params.productId, 10);
   if (!Number.isInteger(productId)) return res.status(400).json({ error: 'Invalid product id' });
   try {
@@ -1258,7 +1270,7 @@ router.get('/by-product/:productId', ...mustAdmin, async (req, res) => {
 });
 
 // GET /api/variants?product_id=XX
-router.get('/', ...mustAdmin, async (req, res) => {
+router.get(['/', '/variants'], ...mustAdmin, async (req, res) => {
   const productId = parseInt(req.query.product_id, 10);
   if (!Number.isInteger(productId)) return res.status(400).json({ error: 'product_id required' });
   try {
@@ -1270,4 +1282,191 @@ router.get('/', ...mustAdmin, async (req, res) => {
   }
 });
 
+
+/* =========================================================
+ * UPDATE STOCKS (batch) — admin only
+ * body: { items: [{ variant_id, stock }] }
+ * ========================================================= */
+router.post('/update-stocks', ...mustAdmin, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.json({ ok: true, updated: 0 });
+    const { stockCol } = await pickVariantCols();
+    if (!stockCol) return res.status(400).json({ message: 'No stock column in product_variants' });
+
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      let updated = 0;
+      for (const it of items) {
+        const vid = Number.parseInt(String(it?.variant_id ?? ''), 10);
+        if (!Number.isFinite(vid)) continue;
+        const s = Math.max(0, Number(it?.stock) || 0);
+        const r = await client.query(`UPDATE product_variants SET ${stockCol} = $1 WHERE variant_id = $2`, [s, vid]);
+        updated += r.rowCount || 0;
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true, updated });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    }
+  } catch (err) {
+    console.error('POST /api/variants/update-stocks error:', err);
+    res.status(500).json({ message: 'Failed to update stocks', ...(isDev ? { details: err.message, code: err.code } : {}) });
+  }
+});
 module.exports = router;
+
+
+/* =========================================================
+ * UPSERT BATCH of variants for a product
+ * POST /api/variants/upsert-batch
+ * body: { product_id, rows: [{variant_id?, sku?, price?, image_url?, details:[{name,value}] }] }
+ *  - Creates/updates product_variants
+ *  - Ensures product_variant_values mapping by option name -> value (create option/value if missing)
+ *  - Safely links/creates product_images with NULL position to avoid uq_product_image_position conflicts
+ * ========================================================= */
+router.post('/upsert-batch', async (req, res) => {
+  const { product_id, rows } = req.body || {};
+  const productId = toInt(product_id);
+  if (!Number.isInteger(productId) || !Array.isArray(rows)) {
+    return res.status(400).json({ message: 'product_id and rows[] required' });
+  }
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Helpers
+    const hasPVid = await hasColumn('product_variants', 'variant_id');
+    const hasPVPrice = await hasColumn('product_variants', 'price');
+    const hasPVPriceOverride = await hasColumn('product_variants', 'price_override');
+    const colVid = hasPVid ? 'variant_id' : 'product_variant_id';
+    const colPrice = hasPVPrice ? 'price' : (hasPVPriceOverride ? 'price_override' : null);
+
+    const fetchOptionId = async (name) => {
+      if (!name) return null;
+      const q1 = await client.query('SELECT option_id FROM product_options WHERE product_id=$1 AND option_name=$2 LIMIT 1', [productId, name]);
+      if (q1.rows[0]?.option_id) return q1.rows[0].option_id;
+      const ins = await client.query('INSERT INTO product_options(product_id, option_name) VALUES ($1,$2) RETURNING option_id', [productId, name]);
+      return ins.rows[0].option_id;
+    };
+
+    const fetchValueId = async (option_id, value_name) => {
+      if (!option_id || !value_name) return null;
+      const q1 = await client.query('SELECT value_id FROM product_option_values WHERE option_id=$1 AND value_name=$2 LIMIT 1', [option_id, value_name]);
+      if (q1.rows[0]?.value_id) return q1.rows[0].value_id;
+      const ins = await client.query('INSERT INTO product_option_values(option_id, value_name) VALUES ($1,$2) RETURNING value_id', [option_id, value_name]);
+      return ins.rows[0].value_id;
+    };
+
+    const upsertVariant = async (r) => {
+      const sku = (r.sku || '').trim() || null;
+      const price = Number.isFinite(Number(r.price)) ? Number(r.price) : null;
+      let image_url = r.image_url || r.image || null;
+      // create/update variant
+      if (r.variant_id) {
+        const sets = [];
+        const vals = [];
+        let idx = 1;
+        if (sku !== null) { sets.push(`sku=$${idx++}`); vals.push(sku); }
+        if (colPrice && price !== null) { sets.push(`${colPrice}=$${idx++}`); vals.push(price); }
+        if (r.image_url !== undefined || r.image !== undefined) { sets.push(`image_url=$${idx++}`); vals.push(image_url); }
+        vals.push(r.variant_id);
+        if (sets.length) {
+          await client.query(`UPDATE product_variants SET ${sets.join(',')} WHERE ${colVid}=$${idx}`, vals);
+        }
+        return r.variant_id;
+      } else {
+        const cols = ['product_id']; const ph = ['$1']; const vals = [productId];
+        let x = 2;
+        if (sku !== null) { cols.push('sku'); ph.push(`$${x}`); vals.push(sku); x++; }
+        if (colPrice && price !== null) { cols.push(colPrice); ph.push(`$${x}`); vals.push(price); x++; }
+        if (image_url !== null) { cols.push('image_url'); ph.push(`$${x}`); vals.push(image_url); x++; }
+        const ins = await client.query(`INSERT INTO product_variants(${cols.join(',')}) VALUES (${ph.join(',')}) RETURNING ${colVid} AS variant_id`, vals);
+        return ins.rows[0].variant_id;
+      }
+    };
+
+    const ensureMapping = async (variant_id, details) => {
+      if (!Array.isArray(details) || !details.length) return;
+      for (const d of details) {
+        const name = (d?.name || '').trim(); const val = (d?.value || '').trim();
+        if (!name || !val) continue;
+        const optId = await fetchOptionId(name);
+        const valId = await fetchValueId(optId, val);
+        const exists = await client.query(
+          'SELECT 1 FROM product_variant_values WHERE variant_id=$1 AND option_id=$2 LIMIT 1',
+          [variant_id, optId]
+        );
+        if (exists.rowCount) {
+          await client.query('UPDATE product_variant_values SET value_id=$1 WHERE variant_id=$2 AND option_id=$3', [valId, variant_id, optId]);
+        } else {
+          await client.query('INSERT INTO product_variant_values(variant_id, option_id, value_id) VALUES ($1,$2,$3)', [variant_id, optId, valId]);
+        }
+      }
+    };
+
+    const attachImage = async (variant_id, url) => {
+      if (!url) return;
+      // strategy: insert if not exists (product_id + url), always set variant_id, and set position=NULL to dodge unique constraint
+      const q = await client.query('SELECT 1 FROM product_images WHERE product_id=$1 AND url=$2 LIMIT 1', [productId, url]);
+      if (q.rowCount === 0) {
+        await client.query('INSERT INTO product_images(product_id, variant_id, url, position) VALUES ($1,$2,$3,NULL)', [productId, variant_id, url]);
+      } else {
+        // ensure not violating uq on (product_id, coalesce(variant_id,-1), position): set position=NULL when changing variant_id
+        await client.query('UPDATE product_images SET variant_id=$1, position=NULL WHERE product_id=$2 AND url=$3', [variant_id, productId, url]);
+      }
+    };
+
+    const outIds = [];
+    for (const r of rows) {
+      const vid = await upsertVariant(r);
+      await ensureMapping(vid, r.details || []);
+      if (r.image_url || r.image) await attachImage(vid, r.image_url || r.image);
+      outIds.push(vid);
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true, variant_ids: outIds });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_e) {}
+    console.error('UPSERT-BATCH error:', err);
+    res.status(500).json({ message: 'UPSERT failed', detail: String(err?.message || err) });
+  } finally {
+    client.release();
+  }
+});
+
+/* =========================================================
+ * DELETE BATCH of variants
+ * body: { variant_ids: [] }
+ * Also nulls product_images.variant_id with position=NULL to avoid unique constraint clashes.
+ * ========================================================= */
+router.post('/delete-batch', async (req, res) => {
+  const { variant_ids } = req.body || {};
+  const ids = Array.isArray(variant_ids) ? variant_ids.map((x)=>parseInt(x,10)).filter(Number.isInteger) : [];
+  if (!ids.length) return res.json({ ok: true, deleted: 0 });
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // detach images first
+    await client.query('UPDATE product_images SET variant_id=NULL, position=NULL WHERE variant_id = ANY($1)', [ids]);
+    // delete mappings
+    await client.query('DELETE FROM product_variant_values WHERE variant_id = ANY($1)', [ids]);
+    // delete variants
+    const r = await client.query('DELETE FROM product_variants WHERE variant_id = ANY($1)', [ids]);
+
+    await client.query('COMMIT');
+    res.json({ ok: true, deleted: r.rowCount });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_e) {}
+    console.error('DELETE-BATCH error:', err);
+    res.status(500).json({ message: 'DELETE failed', detail: String(err?.message || err) });
+  } finally {
+    client.release();
+  }
+});

@@ -12,7 +12,7 @@ if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || JWT_SEC
 const roleMap = { 1: 'admin', 2: 'customer' };
 const normalizeRole = (r) => String(r || '').toLowerCase();
 
-/** ตรวจ Bearer token แล้วแปะ payload เข้า req.user (มี log ช่วยสืบ) */
+/** ตรวจ Bearer token แล้วแปะ payload เข้า req.user */
 function requireAuth(req, res, next) {
   const h = (req.headers.authorization || '').trim();
   const m = h.match(/^Bearer\s+(.+)$/i);
@@ -25,14 +25,13 @@ function requireAuth(req, res, next) {
     const token = m[1].trim();
     const payload = jwt.verify(token, JWT_SECRET);
 
-    // ทำให้ role เป็นมาตรฐานเดียวกัน
     const role = normalizeRole(payload.role);
 
     req.user = {
       ...payload,
-      sub: String(payload.sub || ''),   // user_id ในรูป string
+      sub: String(payload.sub || ''),
       user_id: payload.sub,
-      role,                             // => 'customer' | 'admin'
+      role,
       role_id: payload.role_id || null,
       email: payload.email || null,
       name: payload.name || null,
@@ -57,15 +56,15 @@ function requireAuth(req, res, next) {
   }
 }
 
-/** บังคับบทบาท (มี log ช่วยสืบ) */
-function requireRole(roles = []) {
+/** ✅ ปรับใหม่: ถ้า route ไม่กำหนด roles → อนุญาตทั้ง admin และ customer */
+function requireRole(roles = ['admin', 'customer', 'user']) {
   const allow = (Array.isArray(roles) ? roles : [roles]).map(normalizeRole);
   return (req, res, next) => {
     if (!req.user) {
       console.warn('[ROLE FAIL:NO USER]', req.method, req.originalUrl, { allow });
       return res.status(401).json({ message: 'Token required' });
     }
-    if (allow.length === 0) return next();
+
     const ok = allow.includes(req.userRole);
     console.log('[ROLE CHECK]', {
       m: req.method,
@@ -74,6 +73,7 @@ function requireRole(roles = []) {
       userRole: req.userRole,
       ok
     });
+
     if (ok) return next();
     return res.status(403).json({ message: 'Forbidden: insufficient role' });
   };
@@ -81,12 +81,11 @@ function requireRole(roles = []) {
 
 /** ออก JWT ตอนล็อกอิน */
 function signToken(userRow) {
-  // ✅ map เป็น customer แทน user
   const roleValue = roleMap[userRow.role_id] || userRow.role_id || userRow.role || 'customer';
   const payload = {
     sub:   String(userRow.user_id),
     email: userRow.email,
-    role:  normalizeRole(roleValue), // => 'admin' | 'customer'
+    role:  normalizeRole(roleValue),
     name:  `${userRow.first_name || ''} ${userRow.last_name || ''}`.trim(),
   };
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });

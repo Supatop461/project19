@@ -20,7 +20,10 @@ export const API_BASE = BASE_URL;
 /* ---------- API_ORIGIN (สำหรับรูปภาพ /uploads) ---------- */
 export const API_ORIGIN = (() => {
   try {
-    const u = new URL(BASE_URL, typeof window !== 'undefined' ? window.location.href : 'http://localhost');
+    const u = new URL(
+      BASE_URL,
+      typeof window !== 'undefined' ? window.location.href : 'http://localhost'
+    );
     return u.origin;
   } catch {
     return 'http://localhost:3001';
@@ -32,10 +35,16 @@ export const path = (p) => {
   const str = String(p || '');
   if (/^https?:\/\//i.test(str) || /^\/\//.test(str)) return str;
 
+  const clean = str.replace(/^\/+/, '');
+  // ✅ ถ้าเป็น uploads/... ให้ต่อกับ API_ORIGIN โดยตรง
+  if (clean.startsWith('uploads/') || clean.startsWith('/uploads/')) {
+    return `${API_ORIGIN}/${clean.replace(/^\/+/, '')}`;
+  }
+
   const base = String((BASE_URL || '').replace(/\/+$/, ''));
   const endsWithApi = base.endsWith('/api');
 
-  let s = '/' + str.replace(/^\/+/, '');
+  let s = '/' + clean;
   s = s.replace(/\/+/g, '/');
 
   return endsWithApi

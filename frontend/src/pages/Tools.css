@@ -1,32 +1,96 @@
 /* src/pages/Tools.css */
 
-/* ดึงสไตล์พื้นฐานจาก Plants.css มาใช้ซ้ำ (breadcrumb, การ์ด, กริด ฯลฯ) */
+/* ใช้สไตล์ฐานจาก Plants.css (breadcrumb, การ์ด, กริด ฯลฯ) */
 @import "./Plants.css";
 
-/* ====== ปรับเฉพาะหน้าอุปกรณ์ (Tools) ให้ดูต่างออกเล็กน้อย ====== */
+/* ====== ปรับเฉพาะหน้าอุปกรณ์ (Tools) ให้กลมกลืนทั้งเว็บ ====== */
 
-/* เน้นคำว่า "อุปกรณ์" ใน hero เป็นโทนฟ้า */
+/* Hero */
+.plants-hero {
+  margin-top: 8px;
+}
+.plants-hero h1 {
+  line-height: 1.25;
+  letter-spacing: 0.1px;
+}
+.plants-hero .sub {
+  margin-top: 6px;
+  opacity: .85;
+}
+
+/* เน้นคำใน hero ให้ “คมชัด” แต่ไม่หลุดธีมหลัก
+   ถ้าเว็บใช้โทนเขียวเป็นแบรนด์หลัก ให้ใช้เขียวเข้ม
+   (ถ้า Plants.css มีตัวแปรสีให้ใช้ var(...) ได้เลย) */
 .plants-hero .hl {
-  color: #1d4ed8; /* blue-700 */
+  color: #256c29; /* brand-600 เขียวกลมกลืนทั้งเว็บ */
+  font-weight: 700;
 }
 
-/* เฉดพื้นหลังรูปการ์ดให้ดูสว่างขึ้นนิดหน่อย */
-.plant-card .thumb {
-  background: #f3f4f6; /* gray-100 */
-}
-
-/* โฮเวอร์การ์ดให้แรงขึ้นนิดหน่อยบนหน้าอุปกรณ์ */
-.plant-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.12);
-}
-
-/* กรณีอยากเว้นระยะ grid ของหน้า tools มากขึ้น */
+/* การ์ดหมวดหมู่ */
 .plants-categories {
-  gap: 18px;
+  gap: 16px;            /* ระยะหายใจพื้นฐาน */
 }
 @media (min-width: 768px) {
-  .plants-categories {
-    gap: 20px;
-  }
+  .plants-categories { gap: 20px; }
 }
+@media (min-width: 1024px) {
+  .plants-categories { gap: 22px; }
+}
+
+/* ปรับภาพ thumbnail ให้สมส่วนและไม่บิด */
+.plant-card .thumb {
+  background: #f6f8f7;  /* อ่อนกว่าก่อนหน้าเล็กน้อย ให้ดูสะอาด */
+  border-radius: 14px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;  /* ได้สัดส่วนเท่ากันทุกการ์ด */
+  display: block;
+}
+.plant-card .thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* เนื้อหาในการ์ด */
+.plant-card .meta {
+  padding: 10px 6px 2px 2px;
+}
+.plant-card .p-name {
+  font-weight: 600;
+  letter-spacing: .1px;
+  line-height: 1.35;
+  color: #1f2a24;
+}
+
+/* โฮเวอร์/โฟกัส การ์ดให้ “ลอย” เนียนๆ สไตล์มินิมอล */
+.plant-card {
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  border-radius: 16px;
+  border: 1px solid #e7ece9;
+  background: #ffffff;
+}
+.plant-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(2,22,10,.08);
+  border-color: #dfe6e3;
+}
+
+/* โฟกัสคีย์บอร์ดให้เข้าถึงได้ */
+.plant-card:focus-visible {
+  outline: 3px solid #2e7d32; /* brand */
+  outline-offset: 2px;
+}
+
+/* breadcrumb ให้ชิดแนวตั้งดีขึ้นเล็กน้อย */
+.breadcrumb {
+  margin-bottom: 10px;
+}
+
+/* สถานะข้อความโหลด/ว่าง/ผิดพลาด (ถ้าใช้แค่ <p>) */
+.tools-state {
+  margin-top: 6px;
+  font-size: .98rem;
+}
+.tools-state.is-error { color: #ef4444; }
+.tools-state.is-dim { opacity: .75; }

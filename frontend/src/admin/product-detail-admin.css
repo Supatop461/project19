@@ -1,0 +1,77 @@
+.pd-wrapper {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 32px 20px 60px;
+  font-family: "Sarabun", sans-serif;
+  background: #f6f8f5;
+}
+
+.pd-card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.07);
+  padding: 28px;
+}
+
+.pd-card h2 {
+  font-size: 26px;
+  color: #256c29;
+  margin-bottom: 14px;
+}
+
+.pd-img {
+  width: 100%;
+  max-height: 380px;
+  object-fit: cover;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  background: #f3f4f6;
+}
+
+.pd-info p {
+  margin: 6px 0;
+  font-size: 15px;
+  color: #1f2937;
+}
+
+.pd-section {
+  margin-top: 24px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 18px;
+}
+
+.pd-section h3 {
+  font-size: 18px;
+  color: #256c29;
+  margin-bottom: 8px;
+}
+
+.pd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.pd-table th, .pd-table td {
+  border: 1px solid #e5e7eb;
+  padding: 8px 10px;
+  text-align: left;
+}
+.pd-table th {
+  background: #f3f5f2;
+  font-weight: 600;
+  color: #374151;
+}
+
+.pd-back {
+  display: inline-block;
+  margin-top: 28px;
+  background: #6fb36a;
+  color: #fff;
+  text-decoration: none;
+  padding: 10px 18px;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+.pd-back:hover {
+  background: #4c9950;
+}
