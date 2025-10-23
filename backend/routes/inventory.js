@@ -21,7 +21,8 @@ try { db = require('../db'); } catch { db = require('../db/db'); }
 
 const { requireAuth, requireRole } = require('../middleware/auth');
 const router = express.Router();
-const mustStaff = [requireAuth, requireRole(['admin', 'staff'])];
+const mustStaff = [requireAuth, requireRole(['admin', 'staff', 'user'])];
+
 
 console.log('▶ inventory router LOADED');
 router.get('/_ping', (_req, res) => res.json({ ok: true }));
@@ -733,9 +734,17 @@ router.get('/', ...mustStaff, async (req, res) => {
     const hasCat = await hasTable('product_categories');
     const hasSub = await hasTable('subcategories');
 
+    // --- dynamic columns for price & image (in products) ---
+    const priceCol = await pickFirstExistingColumn('products', ['price','selling_price']);
+    const priceSelect = priceCol ? `p.${priceCol}::numeric AS price` : `NULL::numeric AS price`;
+    const hasProdImageCol = await hasColumn('products','image_url');
+    const imageSelect = hasProdImageCol
+      ? 'p.image_url'
+      : `(SELECT MIN(pi.url) FROM product_images pi WHERE pi.product_id = p.product_id) AS image_url`;
+
     const sql = `
       SELECT
-        p.product_id, p.product_name, p.selling_price, p.image_url,
+        p.product_id, p.product_name, ${priceSelect}, ${imageSelect},
         ${stockExpr} AS stock,
         ${hasCat ? 'p.category_id, c.category_name,' : 'NULL::int AS category_id, NULL::text AS category_name,'}
         ${hasSub ? 'p.subcategory_id, sc.subcategory_name' : 'NULL::int AS subcategory_id, NULL::text AS subcategory_name'}

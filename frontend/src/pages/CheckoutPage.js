@@ -63,7 +63,7 @@ export default function CheckoutPage() {
 
   // ----- addresses -----
   const [addresses, setAddresses] = useState([]);     // รายการ address ที่ดึงมา
-  const [selectedId, setSelectedId] = useState('');   // id ที่เลือกใน <select> ("", "new")
+  const [selectedId, setSelectedId] = useState('new');   // id ที่เลือกใน <select> ("new" = กรอกใหม่)
   const [address, setAddress] = useState({            // ฟอร์ม address (แก้ไขได้)
     line1: '', subdistrict: '', district: '', province: '', zipcode: '',
     phone: '', fullname: '',
@@ -76,29 +76,32 @@ export default function CheckoutPage() {
   const [slip, setSlip] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // โหลด "ที่อยู่ของฉัน" จาก API เดิม (มี /user-addresses; fallback /addresses)
+  // โหลด "ที่อยู่ของฉัน" จาก /api/addresses (กันทุกทรง payload)
   useEffect(() => {
     (async () => {
       try {
         setLoadingAddr(true);
-        let data = [];
-        try {
-          const r1 = await axios.get('/user-addresses');
-          data = Array.isArray(r1.data) ? r1.data : (r1.data?.items || []);
-        } catch {
-          const r2 = await axios.get('/addresses');
-          data = Array.isArray(r2.data) ? r2.data : (r2.data?.items || []);
-        }
-        const list = (data || []).map(normalizeAddr).filter(Boolean);
+        const r = await axios.get('/api/addresses'); // ใช้ path ชัดเจน
+        const raw = Array.isArray(r.data)
+          ? r.data
+          : (r.data?.addresses || r.data?.items || []);
+        const list = (raw || []).map(normalizeAddr).filter(Boolean);
+
         setAddresses(list);
         const def = list.find(a => a.isDefault) || list[0] || null;
         if (def) {
-          setSelectedId(def.id ?? '');
+          setSelectedId(String(def.id));
           setAddress({ ...def, id: undefined, isDefault: undefined });
+          setSaveBack(false);
+          setSaveAsNew(false);
         } else {
-          setSelectedId('new'); // ไม่มีที่อยู่ → ให้กรอกใหม่
+          // ไม่มีที่อยู่ → โหมดกรอกใหม่
+          setSelectedId('new');
+          setSaveBack(false);
+          setSaveAsNew(true); // เผื่ออยากบันทึกเลย
         }
-      } catch {
+      } catch (e) {
+        console.warn('Load /api/addresses failed:', e);
         setSelectedId('new');
       } finally {
         setLoadingAddr(false);
@@ -108,9 +111,11 @@ export default function CheckoutPage() {
 
   const onPickAddr = (val) => {
     setSelectedId(val);
+    // reset toggle ทุกครั้งที่เปลี่ยน
     setSaveBack(false);
-    setSaveAsNew(false);
-    if (val === 'new' || val === '') {
+    setSaveAsNew(val === 'new'); // เลือกกรอกใหม่ → เสนอให้บันทึกใหม่
+
+    if (val === 'new') {
       setAddress({ line1:'', subdistrict:'', district:'', province:'', zipcode:'', phone:'', fullname:'' });
     } else {
       const found = addresses.find(a => String(a.id) === String(val));
@@ -137,25 +142,25 @@ export default function CheckoutPage() {
   async function persistAddressChanges() {
     try {
       if (saveBack && selectedId && selectedId !== 'new') {
-        await axios.put(`/addresses/${selectedId}`, {
-          fullname: address.fullname,
+        await axios.put(`/api/addresses/${selectedId}`, {
+          full_name: address.fullname,
           phone: address.phone,
           line1: address.line1,
           subdistrict: address.subdistrict,
           district: address.district,
           province: address.province,
-          zipcode: address.zipcode,
+          postcode: address.zipcode,
         }).catch(() => {});
       }
       if (saveAsNew) {
-        await axios.post(`/addresses`, {
-          fullname: address.fullname,
+        await axios.post(`/api/addresses`, {
+          full_name: address.fullname,
           phone: address.phone,
           line1: address.line1,
           subdistrict: address.subdistrict,
           district: address.district,
           province: address.province,
-          zipcode: address.zipcode,
+          postcode: address.zipcode,
           is_default: false,
         }).catch(() => {});
       }
@@ -180,23 +185,30 @@ export default function CheckoutPage() {
         price: Number(x.price) || 0,
       }));
 
-      // 1) create order (pending) — ส่งค่าส่งที่คำนวณแล้ว
-      const { data: order } = await axios.post('/orders', {
-        address,
+      // สร้าง order (pending) — ส่งค่าส่งที่คำนวณแล้ว + address
+      const { data: order } = await axios.post('/api/orders', {
+        address: {
+          full_name: address.fullname,
+          phone: address.phone,
+          line1: address.line1,
+          subdistrict: address.subdistrict,
+          district: address.district,
+          province: address.province,
+          postcode: address.zipcode,
+        },
         items,
         shipping_fee: Number(shippingFee) || 0,
       });
 
-      // 2) optional: upload slip
+      // อัปโหลดสลิป (ถ้ามี)
       if (slip) {
         const fd = new FormData();
         fd.append('slip', slip);
-        await axios.post(`/orders/${order.order_id}/slip`, fd, {
+        await axios.post(`/api/orders/${order.order_id || order.id}/slip`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
       }
 
-      // 3) clear cart + go to "my orders"
       clearCart();
       alert('สั่งซื้อสำเร็จ! เราได้บันทึกออเดอร์ของคุณแล้ว');
       navigate('/orders');
@@ -226,12 +238,13 @@ export default function CheckoutPage() {
             onChange={(e) => onPickAddr(e.target.value)}
             style={{ padding:'8px 10px', border:'1px solid #e5e7eb', borderRadius:8 }}
           >
+            {/* new option ไว้บนสุด เพื่อเห็นชัดเจน */}
+            <option value="new">+ ใช้ที่อยู่อื่น (กรอกใหม่)</option>
             {addresses.map(a => (
               <option key={String(a.id)} value={String(a.id)}>
                 {a.isDefault ? '⭐ ' : ''}{addrLabel(a)}
               </option>
             ))}
-            <option value="new">+ ใช้ที่อยู่อื่น (กรอกใหม่)</option>
           </select>
 
           {/* toggles บันทึกกลับระบบ address */}
@@ -242,10 +255,12 @@ export default function CheckoutPage() {
                 บันทึกการแก้ไขกลับที่อยู่นี้
               </label>
             )}
-            <label style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:13 }}>
-              <input type="checkbox" checked={saveAsNew} onChange={(e)=>setSaveAsNew(e.target.checked)} />
-              บันทึกเป็นที่อยู่อันใหม่
-            </label>
+            {selectedId === 'new' && (
+              <label style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:13 }}>
+                <input type="checkbox" checked={saveAsNew} onChange={(e)=>setSaveAsNew(e.target.checked)} />
+                บันทึกเป็นที่อยู่อันใหม่
+              </label>
+            )}
           </div>
         </div>
 
@@ -319,6 +334,25 @@ export default function CheckoutPage() {
             <div>{formatBaht(shippingFee)}</div>
             <div style={{ borderTop: '1px dashed #e5e7eb', marginTop: 8, paddingTop: 8, fontWeight: 700 }}>รวมทั้งสิ้น</div>
             <div style={{ borderTop: '1px dashed #e5e7eb', marginTop: 8, paddingTop: 8, fontWeight: 700 }}>{formatBaht(grand)}</div>
+          </div>
+
+          {/* 🏦 ข้อมูลบัญชีสำหรับโอนเงิน */}
+          <div style={{
+            marginTop: 16,
+            padding: '12px 14px',
+            border: '1px solid #d1d5db',
+            borderRadius: 10,
+            background: '#f9fafb',
+            fontSize: 14,
+            lineHeight: 1.6
+          }}>
+            <strong style={{ display: 'block', fontSize: 15, marginBottom: 6 }}>🏦 โอนเงินเข้าบัญชี</strong>
+            <div><strong>ธนาคาร:</strong> กสิกรไทย (KBank)</div>
+            <div><strong>ชื่อบัญชี:</strong> ศุภชัย พรหมอินทร์</div>
+            <div><strong>เลขที่บัญชี:</strong> 123-4-56789-0</div>
+            <div style={{ color: '#6b7280', marginTop: 4 }}>
+              กรุณาโอนเงินตามยอดรวม และแนบสลิปด้านบนก่อนกดยืนยัน
+            </div>
           </div>
 
           <div style={{ marginTop: 16 }}>

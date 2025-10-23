@@ -3,70 +3,87 @@ import { useParams, Link } from "react-router-dom";
 import { api, mediaSrc } from "../lib/api";
 import "./product-detail-admin.css";
 
-
 export default function ProductDetailAdmin() {
   const { id } = useParams();
   const [product, setProduct] = useState(null);
-  const [stockHistory, setStockHistory] = useState([]);
-  const [salesHistory, setSalesHistory] = useState([]);
+  const [images, setImages] = useState([]);
+  const [stocks, setStocks] = useState([]);
+  const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const loadAll = async () => {
+    const load = async () => {
       try {
         // ✅ โหลดข้อมูลสินค้า
         const pRes = await api.get(`/api/admin/products/${id}`);
         setProduct(pRes.data);
+        setImages(pRes.data.images || pRes.data.product_images || []);
 
-        // ✅ โหลดประวัติสต็อก
+        // ✅ โหลดข้อมูลสต็อกแต่ละล็อต
         try {
-          const invRes = await api.get(`/api/inventory?scope=variant&product_id=${id}`);
-          if (Array.isArray(invRes.data)) setStockHistory(invRes.data);
-          else if (Array.isArray(invRes.data.items)) setStockHistory(invRes.data.items);
+          const inv = await api.get(`/api/inventory?product_id=${id}`);
+          if (Array.isArray(inv.data)) setStocks(inv.data);
+          else if (Array.isArray(inv.data.items)) setStocks(inv.data.items);
         } catch (err) {
           console.warn("ไม่มีข้อมูลสต็อก:", err);
         }
 
-        // ✅ โหลดประวัติการขาย
+        // ✅ โหลดข้อมูลยอดขาย
         try {
-          const saleRes = await api.get(`/api/admin/orders?product_id=${id}`);
-          if (Array.isArray(saleRes.data)) setSalesHistory(saleRes.data);
-          else if (Array.isArray(saleRes.data.items)) setSalesHistory(saleRes.data.items);
+          const sale = await api.get(`/api/admin/orders?product_id=${id}`);
+          if (Array.isArray(sale.data)) setSales(sale.data);
+          else if (Array.isArray(sale.data.items)) setSales(sale.data.items);
         } catch (err) {
-          console.warn("ไม่มีข้อมูลคำสั่งซื้อ:", err);
+          console.warn("ไม่มีข้อมูลยอดขาย:", err);
         }
       } catch (err) {
-        console.error("โหลดสินค้าไม่สำเร็จ:", err);
-        alert("โหลดข้อมูลไม่สำเร็จ");
+        console.error(err);
+        alert("❌ โหลดข้อมูลไม่สำเร็จ");
       } finally {
         setLoading(false);
       }
     };
-    loadAll();
+    load();
   }, [id]);
 
-  if (loading) return <div className="pd-wrapper"><p>⏳ กำลังโหลดข้อมูล...</p></div>;
-  if (!product) return <div className="pd-wrapper"><p>❌ ไม่พบข้อมูลสินค้า</p></div>;
+  if (loading) return <div className="pd-wrapper"><p>⏳ กำลังโหลด...</p></div>;
+  if (!product) return <div className="pd-wrapper"><p>❌ ไม่พบสินค้า</p></div>;
 
-  const img = mediaSrc(product.image_url || product.cover_url);
+  // คำนวณกำไรรวม
+  const totalProfit = sales.reduce((sum, s) => sum + (Number(s.profit || 0)), 0);
 
   return (
     <div className="pd-wrapper">
       <div className="pd-card">
-        <h2>{product.product_name}</h2>
-        <img src={img} alt={product.product_name} className="pd-img" />
+        <h1 className="pd-title">{product.product_name}</h1>
+        <p className="pd-subtitle">{product.category_name} / {product.subcategory_name}</p>
 
-        <div className="pd-info">
-          <p><strong>หมวดหมู่:</strong> {product.category_name} / {product.subcategory_name}</p>
-          <p><strong>ราคา:</strong> ฿{product.price}</p>
-          <p><strong>สต็อกคงเหลือ:</strong> {product.live_stock ?? product.stock ?? 0}</p>
-          <p><strong>หน่วย:</strong> {product.product_unit_name}</p>
-          <p><strong>สถานะ:</strong> {product.product_status_name}</p>
-          <p><strong>ต้นกำเนิด:</strong> {product.origin || "-"}</p>
-          <p><strong>รายละเอียด:</strong><br />{product.description || "ไม่มีรายละเอียด"}</p>
+        {/* 🎞 รูปภาพแบบเลื่อน */}
+        <div className="pd-gallery">
+          <div className="pd-scroll">
+            {images.length > 0 ? (
+              images.map((im, i) => (
+                <img key={i} src={mediaSrc(im.url || im.path)} alt="product" />
+              ))
+            ) : (
+              <div className="pd-placeholder">ไม่มีรูปภาพ</div>
+            )}
+          </div>
         </div>
 
-        {/* 🧾 รุ่นย่อย */}
+        {/* 📋 ข้อมูลสินค้า */}
+        <div className="pd-info">
+          <div><strong>หมวดหมู่:</strong> {product.category_name}</div>
+          <div><strong>ราคาซื้อ:</strong> ฿{product.cost_price ?? "-"}</div>
+          <div><strong>ราคาขาย:</strong> ฿{product.price ?? "-"}</div>
+          <div><strong>สต็อกคงเหลือรวม:</strong> {product.live_stock ?? product.stock ?? 0}</div>
+          <div><strong>หน่วย:</strong> {product.product_unit_name}</div>
+          <div><strong>สถานะ:</strong> {product.product_status_name}</div>
+          <div><strong>ต้นกำเนิด:</strong> {product.origin || "-"}</div>
+          <div><strong>รายละเอียด:</strong><br />{product.description || "ไม่มีรายละเอียด"}</div>
+        </div>
+
+        {/* 🧩 รุ่นย่อย */}
         {Array.isArray(product.variants) && product.variants.length > 0 && (
           <div className="pd-section">
             <h3>รุ่นย่อย (Variants)</h3>
@@ -79,7 +96,7 @@ export default function ProductDetailAdmin() {
                   <tr key={v.variant_id}>
                     <td>{v.sku}</td>
                     <td>{v.variant_name || "-"}</td>
-                    <td>{v.price ?? "-"}</td>
+                    <td>฿{v.price ?? "-"}</td>
                     <td>{v.stock ?? 0}</td>
                   </tr>
                 ))}
@@ -88,48 +105,66 @@ export default function ProductDetailAdmin() {
           </div>
         )}
 
-        {/* 📦 ประวัติสต็อก */}
-        {stockHistory.length > 0 && (
+        {/* 📦 รายละเอียดสต็อกแต่ละล็อต */}
+        {stocks.length > 0 && (
           <div className="pd-section">
-            <h3>ประวัติการเคลื่อนไหวสต็อก</h3>
+            <h3>รายละเอียดสต็อกแต่ละล็อต</h3>
             <table className="pd-table">
               <thead>
-                <tr><th>วันที่</th><th>ประเภท</th><th>จำนวน</th><th>สินค้า/รุ่น</th><th>หมายเหตุ</th></tr>
+                <tr>
+                  <th>วันที่รับเข้า</th>
+                  <th>ล็อต</th>
+                  <th>จำนวนรับเข้า</th>
+                  <th>ขายไป</th>
+                  <th>คงเหลือ</th>
+                  <th>ราคาทุน</th>
+                  <th>กำไรต่อหน่วย</th>
+                  <th>รวมกำไร</th>
+                </tr>
               </thead>
               <tbody>
-                {stockHistory.map((s, i) => (
-                  <tr key={i}>
-                    <td>{new Date(s.created_at).toLocaleString()}</td>
-                    <td>{s.move_type || s.type}</td>
-                    <td>{s.qty_change || s.quantity}</td>
-                    <td>{s.variant_sku || s.product_name}</td>
-                    <td>{s.note || "-"}</td>
-                  </tr>
-                ))}
+                {stocks.map((s, i) => {
+                  const profit = (s.selling_price - s.cost_price) * s.qty_remaining;
+                  return (
+                    <tr key={i}>
+                      <td>{new Date(s.created_at).toLocaleDateString()}</td>
+                      <td>{s.lot_code || "-"}</td>
+                      <td>{s.qty_in ?? 0}</td>
+                      <td>{s.qty_out ?? 0}</td>
+                      <td>{s.qty_remaining ?? 0}</td>
+                      <td>฿{s.cost_price ?? "-"}</td>
+                      <td>฿{(s.selling_price - s.cost_price) || "-"}</td>
+                      <td>฿{profit ?? "-"}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
 
         {/* 💰 ประวัติการขาย */}
-        {salesHistory.length > 0 && (
+        {sales.length > 0 && (
           <div className="pd-section">
             <h3>ประวัติการขายสินค้า</h3>
             <table className="pd-table">
               <thead>
-                <tr><th>วันที่สั่งซื้อ</th><th>เลขที่คำสั่งซื้อ</th><th>จำนวน</th><th>ราคารวม</th><th>สถานะ</th></tr>
+                <tr><th>วันที่</th><th>คำสั่งซื้อ</th><th>จำนวน</th><th>ยอดขาย</th><th>กำไร</th></tr>
               </thead>
               <tbody>
-                {salesHistory.map((o, i) => (
+                {sales.map((o, i) => (
                   <tr key={i}>
                     <td>{new Date(o.created_at).toLocaleDateString()}</td>
                     <td>{o.order_id || o.id}</td>
                     <td>{o.total_qty || o.quantity || "-"}</td>
                     <td>฿{o.total_price || o.grand_total}</td>
-                    <td>{o.status || o.order_status_name}</td>
+                    <td>฿{o.profit ?? "-"}</td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr><th colSpan="4">รวมกำไรทั้งหมด</th><th>฿{totalProfit}</th></tr>
+              </tfoot>
             </table>
           </div>
         )}

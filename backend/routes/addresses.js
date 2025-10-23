@@ -3,20 +3,17 @@
 // ✅ รองรับทั้ง req.user.sub และ req.user.user_id (กันเคส middleware ต่างกัน)
 // ✅ รองรับทั้ง db.getClient() และ db.pool.connect() (ถ้าไม่มี getClient)
 
-
 const express = require('express');
 const db = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 console.log('▶ addresses router LOADED');
 
-
- // [HELPER] auth & db client
-
+// [HELPER] auth & db client
 function getUid(req) {
   const u = req.user || {};
-  return u.sub ?? u.user_id ?? u.id ?? null;a
+  return u.sub ?? u.user_id ?? u.id ?? null; // ← แก้: ลบ ;a ที่พัง
 }
 
 async function getClientSafe() {
@@ -144,7 +141,8 @@ router.get('/', requireAuth, async (req, res) => {
 /* =========================================================
  * [LIST+BACKFILL] GET /api/addresses/me
  * =======================================================*/
-router.get('/me', requireAuth, async (req, res) => {
+// ← แก้: เดิมซ้ำเป็น router.get('/', ...) ทำให้ /me ไม่ทำงาน
+router.get('/me', requireAuth, requireRole(['admin','customer','user']), async (req, res) => {
   try {
     const uid = getUid(req);
     if (!uid) return res.status(401).json({ error: 'Unauthorized' });
@@ -452,10 +450,6 @@ router.delete('/:id', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
-
-
-
-
 
 // ✅ CRUD ที่อยู่ผู้ใช้ + default (atomic transaction) + backfill จาก users.address
 // ✅ รองรับทั้ง req.user.sub และ req.user.user_id (กันเคส middleware ต่างกัน)

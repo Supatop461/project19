@@ -1,4 +1,5 @@
-// backend/server.js — Fixed: duplicate /api/me route removed
+// backend/server.js — CLEAN FIXED VERSION (2025-10-23)
+// ✅ แก้ไขแล้ว: ลบ /api/me ซ้ำ, รองรับ addresses compat, เพิ่ม static /api/uploads
 
 require('dotenv').config();
 const express = require('express');
@@ -17,8 +18,14 @@ app.set('etag', false);
 
 /* ───────────── helpers ───────────── */
 function tryRequire(p) {
-  try { return require(p); } catch (e) { console.warn('⛔ SKIP require:', p, '-', e.code || e.message); return null; }
+  try {
+    return require(p);
+  } catch (e) {
+    console.warn('⛔ SKIP require:', p, '-', e.code || e.message);
+    return null;
+  }
 }
+
 function mount(name, paths, router, ...guards) {
   if (!router) return;
   const arr = Array.isArray(paths) ? paths : [paths];
@@ -28,12 +35,12 @@ function mount(name, paths, router, ...guards) {
 
 /* ───────────── auth (safe default) ───────────── */
 let requireAuth = (_req, _res, next) => next();
-let requireRole  = () => (_req, _res, next) => next();
+let requireRole = () => (_req, _res, next) => next();
 {
   const m = tryRequire('./middleware/auth');
   if (m) {
     requireAuth = m.requireAuth || requireAuth;
-    requireRole = m.requireRole  || requireRole;
+    requireRole = m.requireRole || requireRole;
   }
 }
 
@@ -45,8 +52,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 /* ───────────── CORS ───────────── */
 const rawOrigins =
   process.env.FRONTEND_ORIGIN ||
-  'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:5500';
+  'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:5500,http://localhost:4173';
 const allowlist = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
+
 const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
@@ -75,48 +83,56 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use((req, _res, next) => { console.log('>>>', req.method, req.originalUrl); next(); });
+/* ───────────── log ───────────── */
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, _res, next) => {
+    console.log('>>>', req.method, req.originalUrl);
+    next();
+  });
+}
 
+/* ───────────── root ───────────── */
 app.get('/', (_req, res) => res.send('🌱 Plant Shop API is running...'));
 
 /* ───────────── static uploads ───────────── */
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-app.use('/uploads',     express.static(uploadsDir, { maxAge: '1h' }));
+app.use('/uploads', express.static(uploadsDir, { maxAge: '1h' }));
 app.use('/api/uploads', express.static(uploadsDir, { maxAge: '1h' }));
 
 /* ───────────── rate limit (login) ───────────── */
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
 /* ───────────── require routers ───────────── */
-const authRoutes           = tryRequire('./routes/auth');
-const meRoutes             = tryRequire('./routes/me');
-const categoryRoutes       = tryRequire('./routes/categories');
-const subcategoryRoutes    = tryRequire('./routes/subcategories');
+const authRoutes = tryRequire('./routes/auth');
+const meRoutes = tryRequire('./routes/me');
+const categoryRoutes = tryRequire('./routes/categories');
+const subcategoryRoutes = tryRequire('./routes/subcategories');
 const publicProductsRoutes = tryRequire('./routes/publicProducts');
-const publicUnitsRouter    = tryRequire('./routes/publicUnits');
-const lookupsRouter        = tryRequire('./routes/lookups');
-const adminUnitsRouter     = tryRequire('./routes/adminUnits');
-const adminUsersRouter     = tryRequire('./routes/adminUsers');
-const adminProductsRoutes  = tryRequire('./routes/adminProducts');
-const adminVariantsRoutes  = tryRequire('./routes/adminVariants');
-const adminSubcatRoutes    = tryRequire('./routes/adminSubcategories');
-const productStatusRoutes  = tryRequire('./routes/productStatus');
-const adminOrdersRoutes    = tryRequire('./routes/adminOrders');
-const uploadsRoutes        = tryRequire('./routes/uploads');
-const addressesRoutes      = tryRequire('./routes/addresses');
-const variantRoutes        = tryRequire('./routes/variants');
-const inventoryRoutes      = tryRequire('./routes/inventory');
-const dashboardRoutes      = tryRequire('./routes/dashboard');
-const cartRoutes           = tryRequire('./routes/cart');
-const analyticsRoutes      = tryRequire('./routes/analytics');
-const sizeUnitsRouter      = tryRequire('./routes/sizeUnits');
+const publicUnitsRouter = tryRequire('./routes/publicUnits');
+const lookupsRouter = tryRequire('./routes/lookups');
+const adminUnitsRouter = tryRequire('./routes/adminUnits');
+const adminUsersRouter = tryRequire('./routes/adminUsers');
+const adminProductsRoutes = tryRequire('./routes/adminProducts');
+const adminVariantsRoutes = tryRequire('./routes/adminVariants');
+const adminSubcatRoutes = tryRequire('./routes/adminSubcategories');
+const productStatusRoutes = tryRequire('./routes/productStatus');
+const adminOrdersRoutes = tryRequire('./routes/adminOrders');
+const uploadsRoutes = tryRequire('./routes/uploads');
+const ordersRoutes = tryRequire('./routes/orders');
+const addressesRoutes = tryRequire('./routes/addresses');
+const variantRoutes = tryRequire('./routes/variants');
+const inventoryRoutes = tryRequire('./routes/inventory');
+const dashboardRoutes = tryRequire('./routes/dashboard');
+const cartRoutes = tryRequire('./routes/cart');
+const analyticsRoutes = tryRequire('./routes/analytics');
+const sizeUnitsRouter = tryRequire('./routes/sizeUnits');
 const adminSizeUnitsRouter = tryRequire('./routes/adminSizeUnits');
 
 /* ───────────── PUBLIC mounts ───────────── */
 mount('auth', ['/api/auth', '/auth'], authRoutes);
 // ✅ โหลด me หลัง auth (เพื่อ override /me เก่าจาก auth.js)
-mount('me', '/api/me', meRoutes, requireAuth, requireRole(['admin','customer','user']));
+mount('me', '/api/me', meRoutes, requireAuth, requireRole(['admin', 'customer', 'user']));
 mount('categories', ['/api/categories', '/categories'], categoryRoutes);
 mount('subcategories', ['/api/subcategories', '/subcategories'], subcategoryRoutes);
 mount('publicProducts', '/api/products', publicProductsRoutes);
@@ -126,19 +142,22 @@ mount('lookups', '/api', lookupsRouter);
 /* ───────────── ADMIN mounts ───────────── */
 mount('adminUnits', '/api', adminUnitsRouter);
 mount('adminUsers', '/api', adminUsersRouter, requireAuth, requireRole(['admin']));
-mount('adminProducts', ['/api/admin/products','/admin/products'], adminProductsRoutes, requireAuth, requireRole(['admin']));
-mount('adminVariants', ['/api/admin/variants','/admin/variants'], adminVariantsRoutes, requireAuth, requireRole(['admin']));
-mount('adminSubcats', ['/api/admin/subcategories','/admin/subcategories'], adminSubcatRoutes, requireAuth, requireRole(['admin']));
-mount('adminOrders', ['/api/admin/orders','/admin/orders'], adminOrdersRoutes, requireAuth, requireRole(['admin']));
-mount('productStatus', ['/api/product-status','/product-status'], productStatusRoutes, requireAuth, requireRole(['admin']));
+mount('adminProducts', ['/api/admin/products', '/admin/products'], adminProductsRoutes, requireAuth, requireRole(['admin']));
+mount('adminVariants', ['/api/admin/variants', '/admin/variants'], adminVariantsRoutes, requireAuth, requireRole(['admin']));
+mount('adminSubcats', ['/api/admin/subcategories', '/admin/subcategories'], adminSubcatRoutes, requireAuth, requireRole(['admin']));
+mount('adminOrders', ['/api/admin/orders', '/admin/orders'], adminOrdersRoutes, requireAuth, requireRole(['admin']));
+mount('productStatus', ['/api/product-status', '/product-status'], productStatusRoutes, requireAuth, requireRole(['admin']));
 mount('sizeUnits', '/api/size-units', sizeUnitsRouter);
-mount('adminSizeUnits', ['/api/admin/size-units','/api/admin/sizes'], adminSizeUnitsRouter, requireAuth, requireRole(['admin']));
+mount('adminSizeUnits', ['/api/admin/size-units', '/api/admin/sizes'], adminSizeUnitsRouter, requireAuth, requireRole(['admin']));
 
 /* ───────────── USER mounts ───────────── */
-mount('uploads', ['/api/uploads','/api/upload','/upload'], uploadsRoutes, requireAuth);
-mount('addresses', ['/api/addresses','/addresses'], addressesRoutes, requireAuth);
+mount('uploads', ['/api/uploads', '/api/upload', '/upload'], uploadsRoutes, requireAuth);
+mount('addresses', ['/api/addresses', '/addresses'], addressesRoutes, requireAuth);
+// ✅ addresses compat — รองรับ router ที่ภายในเขียน path เป็น "/api/addresses"
+mount('addresses-compat', '/api', addressesRoutes, requireAuth);
 mount('variants', '/api/variants', variantRoutes);
 mount('inventory', '/api/inventory', inventoryRoutes, requireAuth);
+mount('orders', '/api/orders', ordersRoutes, requireAuth);
 mount('cart', '/api/cart', cartRoutes, requireAuth);
 mount('analytics', '/api/analytics', analyticsRoutes, requireAuth);
 mount('dashboard', '/api/dashboard', dashboardRoutes, requireAuth);

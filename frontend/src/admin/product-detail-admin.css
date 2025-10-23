@@ -1,77 +1,111 @@
 .pd-wrapper {
-  max-width: 1000px;
-  margin: 0 auto;
-  padding: 32px 20px 60px;
+  padding: 24px;
+  background: #f9fafb;
   font-family: "Sarabun", sans-serif;
-  background: #f6f8f5;
 }
 
 .pd-card {
-  background: #fff;
-  border-radius: 16px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.07);
-  padding: 28px;
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  padding: 24px;
+  max-width: 1100px;
+  margin: auto;
 }
 
-.pd-card h2 {
+.pd-title {
   font-size: 26px;
-  color: #256c29;
-  margin-bottom: 14px;
+  color: #1d5a22;
+  margin-bottom: 4px;
 }
 
-.pd-img {
-  width: 100%;
-  max-height: 380px;
-  object-fit: cover;
-  border-radius: 12px;
+.pd-subtitle {
+  color: #777;
   margin-bottom: 16px;
-  background: #f3f4f6;
 }
 
-.pd-info p {
-  margin: 6px 0;
+/* รูปแบบ gallery สไลด์ */
+.pd-gallery {
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+
+.pd-scroll {
+  display: flex;
+  gap: 10px;
+}
+
+.pd-scroll img {
+  width: 180px;
+  height: 180px;
+  border-radius: 14px;
+  object-fit: cover;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.1);
+}
+
+.pd-placeholder {
+  background: #f2f2f2;
+  color: #888;
+  padding: 50px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+/* ข้อมูลสินค้า */
+.pd-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  background: #f6f8f6;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
   font-size: 15px;
-  color: #1f2937;
 }
 
 .pd-section {
-  margin-top: 24px;
-  border-top: 1px solid #e5e7eb;
-  padding-top: 18px;
+  margin-top: 28px;
 }
 
 .pd-section h3 {
-  font-size: 18px;
   color: #256c29;
   margin-bottom: 8px;
 }
 
+/* ตาราง */
 .pd-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  background: white;
 }
+
 .pd-table th, .pd-table td {
-  border: 1px solid #e5e7eb;
-  padding: 8px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e0e0e0;
   text-align: left;
 }
+
 .pd-table th {
-  background: #f3f5f2;
-  font-weight: 600;
-  color: #374151;
+  background: #e8f5e9;
+  color: #1b5e20;
+}
+
+.pd-table tfoot th {
+  background: #d9f1d9;
+  font-size: 16px;
+  text-align: right;
 }
 
 .pd-back {
   display: inline-block;
-  margin-top: 28px;
-  background: #6fb36a;
-  color: #fff;
-  text-decoration: none;
+  margin-top: 24px;
+  color: white;
+  background: #2e7d32;
   padding: 10px 18px;
-  border-radius: 8px;
-  transition: background 0.2s ease;
+  border-radius: 12px;
+  text-decoration: none;
 }
+
 .pd-back:hover {
-  background: #4c9950;
+  background: #256c29;
 }

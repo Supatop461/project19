@@ -11,6 +11,13 @@
 const express = require('express');
 const router = express.Router();
 
+
+
+let db;
+try { db = require('../db'); } catch { db = require('../db/db'); }
+
+
+
 // ===== [SAFE LIST OVERRIDE] inserted by ChatGPT =====
 // This handler is schema-safe and *prevents 400* for GET / (include_archived/search/etc. allowed).
 // It runs early to avoid stricter downstream handlers.
@@ -93,8 +100,8 @@ try {
 
       const qRows = await db.query(`
         SELECT 
-          COALESCE(p.product_id, p.id) AS product_id,
-          COALESCE(p.product_name, p.name) AS product_name,
+          p.product_id AS product_id,
+          p.product_name AS product_name,
           p.price,
           p.category_id, c.category_name,
           p.subcategory_id, s.subcategory_name,
@@ -105,7 +112,7 @@ try {
           p.image_url
         ${baseSQL}
         ${whereSQL}
-        ORDER BY COALESCE(p.product_id, p.id) DESC
+        ORDER BY p.product_id DESC
         LIMIT ${perPage} OFFSET ${offset}
       `, params);
       const rows = qRows.rows || [];
@@ -129,7 +136,7 @@ try {
         image_url: r.image_url || null,
       }));
 
-      return res.json({ items, page, per_page: perPage, total: totalRow.total, _source: 'safe-list' });
+      return res.json({ items, page, per_page: perPage, total: totalRowQ.rows[0].total, _source: 'safe-list' });
     } catch (e) {
       console.error('SAFE LIST failed, falling through to next handler', e);
       return next(); // let original handler handle it
@@ -139,12 +146,6 @@ try {
   console.error('Insert SAFE LIST failed to initialize:', e);
 }
 // ===== [END SAFE LIST OVERRIDE] =====
-
-
-
-let db;
-try { db = require('../db'); } catch { db = require('../db/db'); }
-
 /* ---------- Utils ---------- */
 function toInt(v) {
   const n = Number.parseInt(String(v ?? '').trim(), 10);
@@ -543,42 +544,113 @@ router.post('/:id/variants/generate', async (req, res) => {
       }
     }
 
-    /* ---------- สร้าง options/values ใหม่ ---------- */
+    
+    /* ---------- สร้าง options/values ใหม่ (idempotent; กันซ้ำ) ---------- */
     const optionIdByIndex = [];
-    const optionValueIdMap = {};
-    for (let i=0; i<orderedOptions.length; i++) {
-      const o = orderedOptions[i];
-      const cols = ['product_id', OPT_NAME_COL];
-      const vals = [productId, o.option_name];
-      if (OPT_POS_COL) { cols.push(OPT_POS_COL); vals.push(o.position); }
-      const ph = cols.map((_, idx) => `$${idx+1}`).join(',');
-      const optIns = await client.query(
-        `INSERT INTO ${T_OPT} (${cols.join(',')})
-         VALUES (${ph})
-         RETURNING ${OPT_ID} AS option_id`,
-        vals
-      );
-      const option_id = optIns.rows[0].option_id;
-      optionIdByIndex.push(option_id);
-      optionValueIdMap[o.option_name] = {};
+    const optionValueIdMap = {}; // { [option_name]: { [value_name]: value_id } }
 
-      for (let j=0; j<o.values.length; j++) {
-        const vName = o.values[j];
-        const vCols = [OPT_ID, VAL_NAME_COL];
-        const vVals = [option_id, vName];
-        if (VAL_POS_COL) { vCols.push(VAL_POS_COL); vVals.push(j+1); }
-        const vPh = vCols.map((_, idx) => `$${idx+1}`).join(',');
-        const valIns = await client.query(
-          `INSERT INTO ${T_VAL} (${vCols.join(',')})
-           VALUES (${vPh})
-           RETURNING ${VAL_ID} AS value_id`,
-          vVals
+    for (let i = 0; i < orderedOptions.length; i++) {
+      const o = orderedOptions[i]; // { option_name, values[], position }
+      const name = o.option_name?.trim();
+      if (!name) continue;
+
+      // 1) หา option_id เดิมก่อน (กัน unique (product_id, lower(option_name)))
+      let option_id = null;
+      {
+        const { rows: r1 } = await client.query(
+          `SELECT ${OPT_ID} AS option_id
+             FROM ${T_OPT}
+            WHERE product_id = $1 AND LOWER(${OPT_NAME_COL}) = LOWER($2)
+            LIMIT 1`,
+          [productId, name]
         );
-        optionValueIdMap[o.option_name][vName] = valIns.rows[0].value_id;
+        option_id = r1[0]?.option_id ?? null;
+      }
+
+      // ถ้ายังไม่มี → insert ใหม่ (รองรับ option_position ถ้ามี)
+      if (!option_id) {
+        const cols = ['product_id', OPT_NAME_COL];
+        const vals = [productId, name];
+        if (OPT_POS_COL) { cols.push(OPT_POS_COL); vals.push(o.position); }
+
+        const ph = cols.map((_, idx) => `$${idx + 1}`).join(',');
+        try {
+          const ins = await client.query(
+            `INSERT INTO ${T_OPT} (${cols.join(',')})
+             VALUES (${ph})
+             RETURNING ${OPT_ID} AS option_id`,
+            vals
+          );
+          option_id = ins.rows[0].option_id;
+        } catch (err) {
+          if (err?.code === '23505') {
+            const { rows: r2 } = await client.query(
+              `SELECT ${OPT_ID} AS option_id
+                 FROM ${T_OPT}
+                WHERE product_id = $1 AND LOWER(${OPT_NAME_COL}) = LOWER($2)
+                LIMIT 1`,
+              [productId, name]
+            );
+            option_id = r2[0]?.option_id ?? null;
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      optionIdByIndex.push(option_id);
+
+      // 2) ดึงรายการ value ที่มีอยู่แล้ว
+      optionValueIdMap[name] = optionValueIdMap[name] || {};
+      const { rows: existedVals } = await client.query(
+        `SELECT ${VAL_ID} AS value_id, ${VAL_NAME_COL} AS value_name
+           FROM ${T_VAL}
+          WHERE ${OPT_ID} = $1`,
+        [option_id]
+      );
+      for (const r of existedVals) {
+        optionValueIdMap[name][(r.value_name||'').trim()] = r.value_id;
+      }
+
+      // 3) ใส่ค่าที่ขาด (กันซ้ำ)
+      for (let j = 0; j < o.values.length; j++) {
+        const vName = (o.values[j] || '').trim();
+        if (!vName) continue;
+        if (optionValueIdMap[name][vName]) continue;
+
+        try {
+          const vCols = [OPT_ID, VAL_NAME_COL];
+          const vVals = [option_id, vName];
+          if (VAL_POS_COL) { vCols.push(VAL_POS_COL); vVals.push(j + 1); }
+          const vPh = vCols.map((_, idx) => `$${idx + 1}`).join(',');
+          const valIns = await client.query(
+            `INSERT INTO ${T_VAL} (${vCols.join(',')})
+             VALUES (${vPh})
+             RETURNING ${VAL_ID} AS value_id`,
+            vVals
+          );
+          optionValueIdMap[name][vName] = valIns.rows[0].value_id;
+        } catch (err) {
+          if (err?.code === '23505') {
+            const { rows: r3 } = await client.query(
+              `SELECT ${VAL_ID} AS value_id
+                 FROM ${T_VAL}
+                WHERE ${OPT_ID} = $1 AND LOWER(${VAL_NAME_COL}) = LOWER($2)
+                LIMIT 1`,
+              [option_id, vName]
+            );
+            if (r3[0]?.value_id) {
+              optionValueIdMap[name][vName] = r3[0].value_id;
+            } else {
+              throw err;
+            }
+          } else {
+            throw err;
+          }
+        }
       }
     }
-
-    /* ---------- สร้าง variants ใหม่ + mapping ---------- */
+/* ---------- สร้าง variants ใหม่ + mapping ---------- */
     const created = [];
     for (const it of items) {
       const sku   = it.sku || null;
@@ -1425,52 +1497,176 @@ router.post('/product-images', async (req, res) => insertSingleImage(req.body, r
  * ใช้ดึง variants แบบง่ายให้ FE (ProductManagement) ไม่เจอ 404
  * อิงตาราง product_variants โดยตรง (schema-tolerant เบื้องต้น)
  * ==================================================================== */
+
+/* ==================================================================== */
 router.get('/:id/variants', async (req, res) => {
-  const raw = (req.params?.id ?? '').toString().trim();
-  const productId = Number(raw);
-  if (!Number.isInteger(productId)) {
-    return res.status(400).json({ message: 'Invalid product id' });
+  const productId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(productId)) {
+    return res.status(400).json({ ok: false, error: 'Invalid product id' });
   }
   try {
-    const hasCol = async (t, c) => {
-      const q = await db.query(
-        `SELECT EXISTS(
-           SELECT 1 FROM information_schema.columns
-           WHERE table_schema='public' AND table_name=$1 AND column_name=$2
-         ) AS ok`,
-        [t, c]
-      );
-      return !!(q.rows && q.rows[0] && q.rows[0].ok);
+    const pickFirstExisting = async (table, candidates) => {
+      for (const c of candidates) {
+        const { rows } = await db.query(`
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name=$1 AND column_name=$2
+          LIMIT 1
+        `, [table, c]);
+        if (rows.length) return c;
+      }
+      return null;
     };
 
-    const priceCol = (await hasCol('product_variants', 'price_override')) ? 'price_override'
-                   : (await hasCol('product_variants', 'price')) ? 'price' : null;
-    const stockCol = (await hasCol('product_variants', 'stock_qty')) ? 'stock_qty'
-                   : (await hasCol('product_variants', 'stock')) ? 'stock' : null;
-    const imageCol = (await hasCol('product_variants', 'image_url')) ? 'image_url' : null;
-    const activeCol = (await hasCol('product_variants', 'is_active')) ? 'is_active' : null;
+    // ตรวจว่ามีวิว live-stock ไหม
+    const { rows: viewExist } = await db.query(
+      `SELECT to_regclass('public.v_product_variants_live_stock') IS NOT NULL AS ok`
+    )
+    const hasView = !!viewExist[0]?.ok;
 
-    const fields = [
-      'v.variant_id', 'v.product_id', 'v.sku',
-      priceCol ? `COALESCE(v.${priceCol}, 0) AS price` : '0::numeric AS price',
-      stockCol ? `COALESCE(v.${stockCol}, 0)::int AS stock` : '0::int AS stock',
-      activeCol ? `COALESCE(v.${activeCol}, TRUE) AS is_active` : 'TRUE AS is_active',
-      imageCol ? `COALESCE(v.${imageCol}, '') AS image_url` : `'' AS image_url`,
-    ].join(', ');
+    // pk ฝั่งตาราง (รองรับ schema ต่าง ๆ)
+    const pvPkRows = await db.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='product_variants'
+        AND column_name IN ('variant_id','product_variant_id','id')
+      ORDER BY CASE column_name
+        WHEN 'variant_id' THEN 1
+        WHEN 'product_variant_id' THEN 2
+        ELSE 3
+      END
+      LIMIT 1
+    `);
+    const pvPk = pvPkRows.rows[0]?.column_name || 'variant_id';
 
-    const sql = `
-      SELECT ${fields}
-      FROM product_variants v
-      WHERE v.product_id = $1
-      ORDER BY v.variant_id ASC
-    `;
-    const q = await db.query(sql, [productId]);
-    const rows = q.rows || [];
-    return res.json({ items: rows });
+    let sql;
+    if (hasView) {
+      // หา key ในวิวแบบ dynamic
+      const vKey = await pickFirstExisting('v_product_variants_live_stock',
+        ['variant_id','product_variant_id','pv_id','id']) || 'variant_id';
+
+      // เลือกคอลัมน์ที่ "มีจริง" เท่านั้น
+      const lvPriceCol = await pickFirstExisting('v_product_variants_live_stock', ['price_override','price']);
+      const lvStockCol = await pickFirstExisting('v_product_variants_live_stock', ['stock','stock_qty']);
+      const vPriceCol  = await pickFirstExisting('product_variants', ['price_override','price']);
+      const vStockCol  = await pickFirstExisting('product_variants', ['stock','stock_qty']);
+
+      // สร้าง expression โดยไม่อ้างถึงคอลัมน์ที่ไม่มีอยู่
+      const priceExpr = `COALESCE(${lvPriceCol ? 'lv.'+lvPriceCol : 'NULL'}, ${vPriceCol ? 'v.'+vPriceCol : 'NULL'}, 0)`;
+      const stockExpr = `COALESCE(${lvStockCol ? 'lv.'+lvStockCol : 'NULL'}, ${vStockCol ? 'v.'+vStockCol : 'NULL'}, 0)`;
+
+      sql = `
+        SELECT
+          v.${pvPk} AS variant_id,
+          v.product_id,
+          v.sku,
+          (${priceExpr})::numeric AS price,
+          (${stockExpr})::int     AS stock,
+          (${stockExpr})::int     AS stock_qty,
+          COALESCE(v.is_active, TRUE) AS is_active,
+          COALESCE(v.image_url, '')   AS image_url
+        FROM product_variants v
+        LEFT JOIN v_product_variants_live_stock lv
+          ON lv.${vKey} = v.${pvPk}
+        WHERE v.product_id = $1
+        ORDER BY v.${pvPk} ASC
+      `;
+    } else {
+      // ไม่มีวิว → ดึงตรงจากตาราง (เลือกคอลัมน์แบบ dynamic เช่นกัน)
+      const vPriceCol = await pickFirstExisting('product_variants', ['price_override','price']);
+      const vStockCol = await pickFirstExisting('product_variants', ['stock','stock_qty']);
+      const vOnlyPriceExpr = vPriceCol ? `COALESCE(v.${vPriceCol},0)` : '0';
+      const vOnlyStockExpr = vStockCol ? `COALESCE(v.${vStockCol},0)` : '0';
+
+      sql = `
+        SELECT
+          v.${pvPk} AS variant_id,
+          v.product_id,
+          v.sku,
+          ${vOnlyPriceExpr}::numeric AS price,
+          ${vOnlyStockExpr}::int     AS stock,
+          ${vOnlyStockExpr}::int     AS stock_qty,
+          COALESCE(v.is_active,TRUE) AS is_active,
+          COALESCE(v.image_url,'')   AS image_url
+        FROM product_variants v
+        WHERE v.product_id=$1
+        ORDER BY v.${pvPk} ASC
+      `;
+    }
+
+    const { rows } = await db.query(sql, [productId]);
+    return res.json({ ok: true, variants: rows });
   } catch (err) {
-    console.error('❌ /admin/products/:id/variants error', err);
-    return res.status(200).json({ items: [], _error: 'variants_alias_failed' });
+    console.error('GET /api/admin/products/:id/variants failed', err);
+    return res.status(500).json({ ok: false, error: 'Server error', detail: String(err) });
   }
 });
+/* ==================================================================== */
+
+
+/* ======================================================================
+ * (PATCH) Extra read endpoints for FE — prevent 404 on admin page
+ * GET /api/admin/products/:id/option-values
+ * GET /api/admin/products/:id/variant-values
+ * ==================================================================== */
+router.get('/:id/option-values', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id||'').trim(),10);
+  if (!Number.isFinite(id)) return res.status(400).json({ message: 'Invalid product id' });
+  try {
+    const hasPO = await hasTable('product_options');
+    const hasPOV = await hasTable('product_option_values');
+    if (!hasPO || !hasPOV) return res.json([]);
+
+    const hasPos = await hasColumn('product_option_values','value_position');
+    const orderVal = hasPos ? 'COALESCE(v.value_position,0), v.value_id' : 'v.value_id';
+
+    const { rows } = await db.query(
+      `SELECT v.value_id, v.option_id, v.value_name, ${hasPos ? 'v.value_position' : 'NULL::int AS value_position'}
+       FROM product_option_values v
+       JOIN product_options o ON o.option_id = v.option_id
+       WHERE o.product_id = $1
+       ORDER BY v.option_id ASC, ${orderVal} ASC`,
+      [id]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('GET /admin/products/:id/option-values error', e);
+    res.status(500).json({ message: 'Failed to load option values' });
+  }
+});
+
+router.get('/:id/variant-values', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id||'').trim(),10);
+  if (!Number.isFinite(id)) return res.status(400).json({ message: 'Invalid product id' });
+  try {
+    const hasPVV = await hasTable('product_variant_values');
+    const hasPV  = await hasTable('product_variants');
+    if (!hasPV || !hasPVV) return res.json([]);
+
+    // tolerant primary keys
+    const pvPk = (await hasColumn('product_variants','variant_id')) ? 'variant_id'
+                : (await hasColumn('product_variants','product_variant_id')) ? 'product_variant_id' : 'id';
+
+    const vCol = (await hasColumn('product_variant_values','variant_id')) ? 'variant_id'
+               : (await hasColumn('product_variant_values','product_variant_id')) ? 'product_variant_id' : null;
+    const oCol = (await hasColumn('product_variant_values','option_id')) ? 'option_id' : null;
+    const valCol = (await hasColumn('product_variant_values','value_id')) ? 'value_id'
+                 : (await hasColumn('product_variant_values','option_value_id')) ? 'option_value_id' : null;
+
+    if (!vCol || !oCol || !valCol) return res.json([]);
+
+    const { rows } = await db.query(
+      `SELECT pvv.${vCol} AS variant_id, pvv.${oCol} AS option_id, pvv.${valCol} AS value_id
+         FROM product_variant_values pvv
+         JOIN product_variants pv ON pv.${pvPk} = pvv.${vCol}
+        WHERE pv.product_id = $1
+        ORDER BY pvv.${vCol} ASC, pvv.${oCol} ASC`,
+      [id]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('GET /admin/products/:id/variant-values error', e);
+    res.status(500).json({ message: 'Failed to load variant values' });
+  }
+});
+
 
 module.exports = router;

@@ -1,4 +1,4 @@
-// FRONTEND: src/pages/HomeUser.js — Live suggestions (infinite scroll + keyboard) + search เดิม
+// FRONTEND: src/pages/HomeUser.js — Single-Box Search (keyword + category triggers)
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import "./HomeUser.css";
@@ -29,7 +29,7 @@ const normalizeProduct = (p, idx) => {
 
   return {
     id: p.product_id ?? p.id ?? `p-${idx}`,
-    name: p.product_name ?? p.name_th ?? p.name ?? p.title ?? "",
+    name: p.product_name ?? p.title ?? p.name_th ?? p.name ?? "",
     price,
     img,
     category_id: String(cid || ""),
@@ -51,19 +51,129 @@ async function fetchWithCount(url, want) {
   return [];
 }
 
+/* ---------- debounce (live suggest) ---------- */
+const useDebounce = (value, delay = 250) => {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return v;
+};
+
+/* ---------- Variant fetch (lazy + robust) ---------- */
+const variantCache = new Map();
+async function loadVariantBrief(productId) {
+  if (!productId) return { hasVariants: false, variantCount: 0, options: [], variants: [] };
+  const pid = String(productId);
+  if (variantCache.has(pid)) return variantCache.get(pid);
+
+  let options = [];
+  let variants = [];
+
+  const tries = [
+    [`/products/${pid}/variants`, {}],
+    [`/api/products/${pid}/variants`, {}],
+    [`/products/${pid}`, {}],
+    [`/api/products/${pid}`, {}],
+  ];
+
+  for (const [ep, params] of tries) {
+    try {
+      const { data } = await api.get(path(ep), { params: { ...params, _: Date.now() } });
+
+      const list = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : null;
+      if (Array.isArray(list) && list.length) {
+        variants = list.map((v, i) => ({
+          id: v.variant_id ?? v.id ?? `v-${pid}-${i}`,
+          sku: v.sku ?? v.code ?? "",
+          price: Number(v.price_override ?? v.selling_price ?? v.price ?? 0) || 0,
+          stock: Number(v.stock ?? v.stock_qty ?? v.qty ?? v.onhand ?? 0) || 0,
+          label:
+            v.sku_label ??
+            v.variant_label ??
+            [v.option1_value, v.option2_value, v.option3_value].filter(Boolean).join(" / "),
+        }));
+        break;
+      }
+
+      if (data && typeof data === "object") {
+        const embedded =
+          (Array.isArray(data.variants) && data.variants) ||
+          (Array.isArray(data.data?.variants) && data.data.variants) ||
+          (Array.isArray(data.product?.variants) && data.product.variants) ||
+          (Array.isArray(data.items) && data.items?.[0]?.variants);
+
+        if (embedded && embedded.length) {
+          variants = embedded.map((v, i) => ({
+            id: v.variant_id ?? v.id ?? `v-${pid}-${i}`,
+            sku: v.sku ?? v.code ?? "",
+            price: Number(v.price_override ?? v.selling_price ?? v.price ?? 0) || 0,
+            stock: Number(v.stock ?? v.stock_qty ?? v.qty ?? v.onhand ?? 0) || 0,
+            label:
+              v.sku_label ??
+              v.variant_label ??
+              [v.option1_value, v.option2_value, v.option3_value].filter(Boolean).join(" / "),
+          }));
+          const optSrc = data.options || data.product?.options || data.data?.options || data.option_groups || [];
+          if (Array.isArray(optSrc) && optSrc.length) {
+            options = optSrc.map((o, i) => ({
+              name: o.option_name ?? o.name ?? `Option ${i + 1}`,
+              values:
+                toArray(o.values)?.map((x) => x?.value ?? x) ??
+                [o.value1, o.value2, o.value3].filter(Boolean),
+            }));
+          }
+          break;
+        }
+
+        const optList =
+          (Array.isArray(data.options) && data.options) ||
+          (Array.isArray(data.data?.options) && data.data.options);
+        if (Array.isArray(optList) && optList.length) {
+          options = optList.map((o, i) => ({
+            name: o.option_name ?? o.name ?? `Option ${i + 1}`,
+            values:
+              toArray(o.values)?.map((x) => x?.value ?? x) ??
+              [o.value1, o.value2, o.value3].filter(Boolean),
+          }));
+        }
+      }
+    } catch {}
+  }
+
+  const brief = {
+    hasVariants: !!(variants.length || options.some((x) => (x.values || []).length)),
+    variantCount: variants.length,
+    options,
+    variants,
+  };
+  variantCache.set(pid, brief);
+  return brief;
+}
+
+/* ---------- Server search (multi-endpoint) ---------- */
 async function serverSearch(mode, value, want = 100) {
   const tryList = [];
   if (mode === "keyword") {
     tryList.push(["/products/search", { q: value, limit: want }]);
+    tryList.push(["/api/products/search", { q: value, limit: want }]);
     tryList.push(["/products", { q: value, limit: want }]);
+    tryList.push(["/api/products", { q: value, limit: want }]);
     tryList.push(["/products", { keyword: value, limit: want }]);
+    tryList.push(["/api/products", { keyword: value, limit: want }]);
     tryList.push(["/products", { search: value, limit: want }]);
+    tryList.push(["/api/products", { search: value, limit: want }]);
   } else if (mode === "category") {
     tryList.push(["/products", { category_id: value, limit: want }]);
+    tryList.push(["/api/products", { category_id: value, limit: want }]);
     tryList.push(["/products/by-category", { id: value, limit: want }]);
+    tryList.push(["/api/products/by-category", { id: value, limit: want }]);
   } else if (mode === "subcategory") {
     tryList.push(["/products", { subcategory_id: value, limit: want }]);
+    tryList.push(["/api/products", { subcategory_id: value, limit: want }]);
     tryList.push(["/products/by-subcategory", { id: value, limit: want }]);
+    tryList.push(["/api/products/by-subcategory", { id: value, limit: want }]);
   }
 
   for (const [ep, params] of tryList) {
@@ -76,27 +186,121 @@ async function serverSearch(mode, value, want = 100) {
   return [];
 }
 
-/* ---------- debounce (live suggest) ---------- */
-const useDebounce = (value, delay = 250) => {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return v;
-};
-
 /* ---------- Product card ---------- */
-const ProductCard = ({ p }) => (
-  <div className="product-card">
-    <Link to={`/products/${p.id}`}>
-      {p.img ? <img src={p.img} alt={p.name} /> : <div className="noimg">ไม่มีรูป</div>}
-    </Link>
-    <h3><Link to={`/products/${p.id}`}>{p.name}</Link></h3>
-    <p>{p.price ? `${p.price.toLocaleString()} บาท` : "— บาท"}</p>
-    <button className="btn-add" onClick={() => addToCart(p)}>+ เพิ่มลงตะกร้า</button>
-  </div>
-);
+const ProductCard = ({ p }) => {
+  const [brief, setBrief] = useState({ hasVariants: false, variantCount: 0, options: [], variants: [] });
+  const [hasVarKnown, setHasVarKnown] = useState(false);
+  const [hasVar, setHasVar] = useState(false);
+  const [openPicker, setOpenPicker] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  const probe = async () => {
+    if (hasVarKnown) return;
+    setPicking(true);
+    try {
+      const b = await loadVariantBrief(p.id);
+      setBrief(b);
+      setHasVar(b.hasVariants);
+      setHasVarKnown(true);
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const openAndLoad = async () => {
+    if (!hasVarKnown) await probe();
+    if (!hasVar) return;
+    setOpenPicker((v) => !v);
+  };
+
+  const showMiniList = brief.variantCount > 0 && brief.variantCount <= 12;
+
+  const onAddVariant = (v) => {
+    const price = Number(v.price || p.price || 0) || 0;
+    const item = {
+      ...p,
+      variant_id: v.id,
+      sku: v.sku,
+      price,
+      name: v.label ? `${p.name} — ${v.label}` : p.name,
+      stock: v.stock ?? undefined,
+    };
+    addToCart(item);
+  };
+
+  return (
+    <div className="product-card" onMouseEnter={probe} onFocus={probe}>
+      <Link to={`/products/${p.id}`} className="thumb-wrap">
+        {p.img ? <img src={p.img} alt={p.name} /> : <div className="noimg">ไม่มีรูป</div>}
+        {hasVarKnown && hasVar && <span className="var-badge">มีตัวเลือก</span>}
+      </Link>
+
+      <h3><Link to={`/products/${p.id}`}>{p.name}</Link></h3>
+      <p>{p.price ? `${p.price.toLocaleString()} บาท` : "— บาท"}</p>
+
+      <div className="var-actions">
+        <button className="btn-add" type="button" onClick={() => addToCart(p)}>+ เพิ่มลงตะกร้า</button>
+        {hasVarKnown && hasVar && (
+          <button className="btn-choose" type="button" onClick={openAndLoad}>
+            {openPicker ? "ซ่อนตัวเลือก" : "เลือกตัวเลือก"}
+          </button>
+        )}
+      </div>
+
+      {openPicker && hasVar && (
+        <div className="var-panel">
+          {picking && <div className="var-loading">กำลังดึงตัวเลือก…</div>}
+
+          {!picking && brief.options?.length > 0 && (
+            <div className="var-options">
+              {brief.options.slice(0, 2).map((o, i) => (
+                <div className="var-opt" key={i}>
+                  <div className="var-opt-name">{o.name}</div>
+                  <div className="var-opt-values">
+                    {(o.values || []).slice(0, 6).map((val, idx) => (
+                      <span className="chip" key={idx}>{String(val)}</span>
+                    ))}
+                    {(o.values || []).length > 6 && <span className="chip muted">+{o.values.length - 6} …</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!picking && showMiniList && (
+            <div className="var-list">
+              {brief.variants.map((v) => (
+                <div className="var-item" key={v.id}>
+                  <div className="var-label">
+                    <div className="l1">{v.label || v.sku || "ตัวเลือก"}</div>
+                    <div className="l2">
+                      {v.price ? `฿${Number(v.price).toLocaleString()}` : "—"}
+                      {typeof v.stock === "number" ? ` • คงเหลือ ${v.stock}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    className="btn-add-variant"
+                    type="button"
+                    disabled={typeof v.stock === "number" && v.stock <= 0}
+                    onClick={() => onAddVariant(v)}
+                  >
+                    เพิ่ม
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!picking && !showMiniList && (
+            <div className="var-foot">
+              <Link className="btn-detail wide" to={`/products/${p.id}`}>ไปหน้าเลือกตัวเลือกทั้งหมด</Link>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 /* ---------------- Page ---------------- */
 export default function HomeUser() {
@@ -108,29 +312,37 @@ export default function HomeUser() {
   const [loading, setLoading] = useState({ cat: true, sub: true, best: true, all: true, search: false });
   const [err, setErr] = useState({ cat: "", sub: "", best: "", all: "", search: "" });
 
-  // Search state
-  const [mode, setMode] = useState("keyword"); // "keyword" | "category" | "subcategory"
+  // Single-box search state
   const [keyword, setKeyword] = useState("");
-  const [catValue, setCatValue] = useState("");
-  const [subValue, setSubValue] = useState("");
 
-  // Live suggestions + pagination + keyboard
+  // Live suggestions
   const dq = useDebounce(keyword, 250);
   const [sugs, setSugs] = useState([]);
   const [openSugs, setOpenSugs] = useState(false);
   const [sugPage, setSugPage] = useState(0);
   const [sugHasMore, setSugHasMore] = useState(false);
   const [sugLoading, setSugLoading] = useState(false);
-  const [sugActive, setSugActive] = useState(-1); // index for keyboard
+  const [sugActive, setSugActive] = useState(-1);
   const sugWrapRef = useRef(null);
   const sugListRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Category popover
+  const [openCatId, setOpenCatId] = useState(null);
+  const popWrapRef = useRef(null);
 
   useEffect(() => {
     const onClick = (e) => {
       if (sugWrapRef.current && !sugWrapRef.current.contains(e.target)) setOpenSugs(false);
+      if (popWrapRef.current && !popWrapRef.current.contains(e.target)) setOpenCatId(null);
     };
+    const onKey = (e) => { if (e.key === "Escape") { setOpenSugs(false); setOpenCatId(null); } };
     document.addEventListener("click", onClick);
-    return () => document.removeEventListener("click", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   /* ---------- Loaders ---------- */
@@ -215,47 +427,30 @@ export default function HomeUser() {
     })();
   }, []);
 
-  /* ---------- Search ---------- */
+  /* ---------- Client filter (fallback) ---------- */
   const clientFilter = useMemo(() => {
-    return (mode, value) => {
-      if (!value) return [];
-      const val = String(value).toLowerCase();
-      if (mode === "keyword") {
+    return {
+      keyword: (val) => {
+        const q = String(val || "").toLowerCase();
+        if (!q) return [];
         return allProducts.filter(
-          (p) => p.name.toLowerCase().includes(val) || String(p.id).toLowerCase().includes(val)
+          (p) => p.name.toLowerCase().includes(q) || String(p.id).toLowerCase().includes(q)
         );
-      }
-      if (mode === "category") {
-        return allProducts.filter(
-          (p) => p.category_id.toLowerCase() === val || p.category_name.toLowerCase() === val
-        );
-      }
-      if (mode === "subcategory") {
-        return allProducts.filter(
-          (p) => p.subcategory_id.toLowerCase() === val || p.subcategory_name.toLowerCase() === val
-        );
-      }
-      return [];
+      },
+      category: (cid) => allProducts.filter((p) => p.category_id === String(cid)),
+      subcategory: (sid) => allProducts.filter((p) => p.subcategory_id === String(sid)),
     };
   }, [allProducts]);
 
-  const onSearch = async (e) => {
-    e?.preventDefault?.();
+  /* ---------- Search Runners ---------- */
+  const runKeywordSearch = async (q) => {
     setSearchResults(null);
     setErr((x) => ({ ...x, search: "" }));
     setLoading((s) => ({ ...s, search: true }));
     try {
-      let val = "";
-      if (mode === "keyword") val = keyword.trim();
-      if (mode === "category") val = catValue;
-      if (mode === "subcategory") val = subValue;
-      if (!val) { setSearchResults([]); return; }
-
-      const srv = await serverSearch(mode, val, 100);
-      const list = (srv.length ? srv : clientFilter(mode, val))
-        .map((p, i) => normalizeProduct(p, i))
-        .filter((x) => x.id && x.name);
-
+      const srv = await serverSearch("keyword", q, 100);
+      const raw = srv.length ? srv : clientFilter.keyword(q);
+      const list = raw.map((p, i) => normalizeProduct(p, i)).filter((x) => x.id && x.name);
       setSearchResults(list);
       if (!list.length) setErr((x) => ({ ...x, search: "ไม่พบผลลัพธ์ที่ตรงกับเงื่อนไข" }));
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -267,12 +462,55 @@ export default function HomeUser() {
     }
   };
 
-  /* ---------- Live suggestions: fetch + paginate ---------- */
+  const runCategorySearch = async (cid) => {
+    setSearchResults(null);
+    setErr((x) => ({ ...x, search: "" }));
+    setLoading((s) => ({ ...s, search: true }));
+    try {
+      const srv = await serverSearch("category", cid, 100);
+      const raw = srv.length ? srv : clientFilter.category(cid);
+      const list = raw.map((p, i) => normalizeProduct(p, i)).filter((x) => x.id && x.name);
+      setSearchResults(list);
+    } catch {
+      setSearchResults(clientFilter.category(cid));
+    } finally {
+      setLoading((s) => ({ ...s, search: false }));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const runSubcategorySearch = async (sid) => {
+    setSearchResults(null);
+    setErr((x) => ({ ...x, search: "" }));
+    setLoading((s) => ({ ...s, search: true }));
+    try {
+      const srv = await serverSearch("subcategory", sid, 100);
+      const raw = srv.length ? srv : clientFilter.subcategory(sid);
+      const list = raw.map((p, i) => normalizeProduct(p, i)).filter((x) => x.id && x.name);
+      setSearchResults(list);
+    } catch {
+      setSearchResults(clientFilter.subcategory(sid));
+    } finally {
+      setLoading((s) => ({ ...s, search: false }));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  /* ---------- Single input: submit = keyword search ---------- */
+  const onSearchSubmit = async (e) => {
+    e?.preventDefault?.();
+    setOpenSugs(false);
+    setOpenCatId(null);
+    const q = (keyword || "").trim();
+    await runKeywordSearch(q);
+  };
+
+  /* ---------- Live suggestions (always for keyword input) ---------- */
   const fetchSugs = async ({ reset = false } = {}) => {
-    if (mode !== "keyword") return;
     const q = dq.trim();
     if (q.length < 2) {
       setSugs([]); setSugHasMore(false); setSugPage(0); setSugActive(-1);
+      setOpenSugs(false);
       return;
     }
 
@@ -280,7 +518,7 @@ export default function HomeUser() {
     const page = reset ? 0 : sugPage;
     const offset = page * limit;
 
-    // รองรับทั้ง limit/offset, page/per_page
+    const endpoints = ["/api/products", "/products"];
     const paramSets = [
       { search: q, limit, offset },
       { q, limit, offset },
@@ -289,35 +527,37 @@ export default function HomeUser() {
     ];
 
     setSugLoading(true);
-    for (const params of paramSets) {
-      try {
-        const { data } = await api.get(path("/api/products"), { params });
-        const rows = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
-        const items = rows.map((p, i) => normalizeProduct(p, offset + i));
-        if (items.length) {
-          setSugs((old) => (reset ? items : [...old, ...items]));
-          setSugHasMore(items.length >= limit);
-          if (reset) setSugPage(0);
-          return;
-        }
-      } catch {}
+    for (const ep of endpoints) {
+      for (const params of paramSets) {
+        try {
+          const { data } = await api.get(path(ep), { params });
+          const rows = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
+          const items = rows.map((p, i) => normalizeProduct(p, offset + i));
+          if (items.length) {
+            setSugs((old) => (reset ? items : [...old, ...items]));
+            setSugHasMore(items.length >= limit);
+            if (reset) setSugPage(0);
+            setOpenSugs(document.activeElement === inputRef.current && items.length > 0);
+            setSugLoading(false);
+            return;
+          }
+        } catch {}
+      }
     }
-    // ไม่มีข้อมูล
+
     setSugHasMore(false);
     if (reset) setSugs([]);
     setSugActive(-1);
+    setOpenSugs(false);
     setSugLoading(false);
   };
 
-  // trigger เมื่อ keyword เปลี่ยน
   useEffect(() => {
-    if (mode !== "keyword") { setSugs([]); return; }
-    setOpenSugs(true);
     setSugPage(0);
     fetchSugs({ reset: true }).finally(() => setSugLoading(false));
-  }, [dq, mode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dq]);
 
-  // scroll โหลดเพิ่ม
   const onSugScroll = (e) => {
     const el = e.currentTarget;
     if (!sugHasMore || sugLoading) return;
@@ -329,34 +569,34 @@ export default function HomeUser() {
   };
 
   useEffect(() => {
-    if (sugPage > 0) {
-      fetchSugs().finally(() => setSugLoading(false));
-    }
+    if (sugPage > 0) fetchSugs().finally(() => setSugLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sugPage]);
 
   const pickSuggest = (p) => {
     setKeyword(p.name || "");
     setOpenSugs(false);
-    onSearch();
+    runKeywordSearch(p.name || "");
   };
 
-  // keyboard navigation
   const onKeyDown = (e) => {
     if (!openSugs || !sugs.length) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setSugActive((i) => Math.min(i + 1, sugs.length - 1));
-      // auto-scroll item into view
       queueMicrotask(() => {
-        const el = sugListRef.current?.querySelector(`[data-idx="${Math.min(sugActive + 1, sugs.length - 1)}"]`);
+        const el = sugListRef.current?.querySelector(
+          `[data-idx="${Math.min(sugActive + 1, sugs.length - 1)}"]`
+        );
         el?.scrollIntoView({ block: "nearest" });
       });
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSugActive((i) => Math.max(i - 1, 0));
       queueMicrotask(() => {
-        const el = sugListRef.current?.querySelector(`[data-idx="${Math.max(sugActive - 1, 0)}"]`);
+        const el = sugListRef.current?.querySelector(
+          `[data-idx="${Math.max(sugActive - 1, 0)}"]`
+        );
         el?.scrollIntoView({ block: "nearest" });
       });
     } else if (e.key === "Enter") {
@@ -371,39 +611,29 @@ export default function HomeUser() {
 
   const listToShow = searchResults ?? allProducts;
 
+  // ---------- Quick actions from category cards ----------
+  const searchByCategory = async (categoryId) => { setOpenCatId(null); await runCategorySearch(String(categoryId)); };
+  const searchBySubcategory = async (subId) => { setOpenCatId(null); await runSubcategorySearch(String(subId)); };
+
   return (
     <div className="home-container">
-      {/* Search */}
-      <form className="search-bar card" onSubmit={onSearch}>
-        <div className="filters-row">
-          <label>
-            โหมดค้นหา
-            <select
-              value={mode}
-              onChange={(e) => { setMode(e.target.value); setErr((x) => ({ ...x, search: "" })); }}
-            >
-              <option value="keyword">คีย์เวิร์ด</option>
-              <option value="category">หมวดหมู่</option>
-              <option value="subcategory">หมวดหมู่ย่อย</option>
-            </select>
-          </label>
-
+      {/* Search — single input */}
+      <form className="search-bar card" onSubmit={onSearchSubmit}>
+        <div className="filters-row search-centered">
           <label className="grow" ref={sugWrapRef}>
-            คำค้นหา
             <input
+              ref={inputRef}
               type="text"
-              placeholder="เช่น กุหลาบ กระบองเพชร ดินปลูก…"
+              className="search-input"
+              placeholder="🔍 พิมพ์ชื่อสินค้า เช่น กุหลาบ กระบองเพชร ดินปลูก... (หรือกดเลือกหมวดหมู่ด้านล่าง)"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onFocus={() => sugs.length && setOpenSugs(true)}
+              onBlur={() => setTimeout(() => setOpenSugs(false), 120)}
               onKeyDown={onKeyDown}
             />
             {openSugs && (
-              <div
-                className="live-suggest"
-                ref={sugListRef}
-                onScroll={onSugScroll}
-              >
+              <div className="live-suggest" ref={sugListRef} onScroll={onSugScroll}>
                 {sugs.map((p, idx) => (
                   <button
                     key={p.id}
@@ -414,79 +644,114 @@ export default function HomeUser() {
                     onClick={() => pickSuggest(p)}
                   >
                     <span className="s-name">{p.name}</span>
-                    <span className="s-price">{p.price ? `฿${p.price.toLocaleString()}` : "—"}</span>
+                    <span className="s-price">
+                      {p.price ? `฿${p.price.toLocaleString()}` : "—"}
+                    </span>
                   </button>
                 ))}
                 {sugLoading && <div className="live-suggest-loading">กำลังโหลด…</div>}
-                {!sugHasMore && !sugs.length && <div className="live-suggest-empty">ไม่พบคำที่ใกล้เคียง</div>}
+                {!sugHasMore && !sugs.length && (
+                  <div className="live-suggest-empty">ไม่พบคำที่ใกล้เคียง</div>
+                )}
               </div>
             )}
           </label>
 
-          <button className="btn-search" type="submit" disabled={loading.search}>
-            <span className="btn-ico">🔎</span>
-            {loading.search ? "กำลังค้นหา…" : "ค้นหา"}
+          <button className="btn-search improved" type="submit" disabled={loading.search}>
+            {loading.search ? "🔎 กำลังค้นหา..." : "ค้นหา"}
           </button>
         </div>
+
         {!!err.search && <div className="info-inline warn">{err.search}</div>}
       </form>
 
-      {/* Type Explorer */}
+      {/* Type Explorer (Plants / Tools) — click to open popover then search */}
       <section className="type-explorer">
-        <div className="type-grid">
+        <div className="type-grid" ref={popWrapRef}>
           {categories
             .filter((c) => ["plants", "tools"].includes(String(c.slug).toLowerCase()))
             .map((c) => {
               const subs = subcategories.filter((s) => s.category_id === c.id);
               const chips = subs.slice(0, 6);
-              const to = c.slug === "plants" ? "/plants" : c.slug === "tools" ? "/tools" : `/category/${c.id}`;
 
               return (
-                <Link key={c.id} className="type-card" to={to}>
-                  {c.image ? <img src={c.image} alt={c.name} /> : <div className="noimg">—</div>}
-                  <h3>{c.name}</h3>
-                  <div className="chips">
-                    {chips.length ? (
-                      chips.map((s) => (
-                        <span
-                          key={s.id}
-                          className="chip"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            setMode("subcategory");
-                            setSubValue(s.id);
-                            onSearch();
-                          }}
-                          role="button"
-                          tabIndex={0}
-                        >
-                          {s.name}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="chip muted">ยังไม่มีประเภท</span>
-                    )}
-                  </div>
-                  <div className="type-meta">{subs.length} ประเภทย่อย</div>
-                </Link>
+                <div key={c.id} className={`type-card-wrap ${openCatId === c.id ? "active" : ""}`}>
+                  <button
+                    type="button"
+                    className="type-card-btn"
+                    onClick={() => setOpenCatId((v) => (v === c.id ? null : c.id))}
+                    aria-expanded={openCatId === c.id}
+                    aria-controls={`cat-pop-${c.id}`}
+                  >
+                    <div className="type-card">
+                      {c.image ? <img src={c.image} alt={c.name} /> : <div className="noimg">—</div>}
+                      <h3>{c.name}</h3>
+                      <div className="chips">
+                        {chips.length ? (
+                          chips.map((s) => <span key={s.id} className="chip">{s.name}</span>)
+                        ) : (
+                          <span className="chip muted">ยังไม่มีประเภท</span>
+                        )}
+                      </div>
+                      <div className="type-meta">{subs.length} ประเภทย่อย</div>
+                    </div>
+                  </button>
+
+                  {openCatId === c.id && (
+                    <div id={`cat-pop-${c.id}`} className="cat-popover">
+                      <div className="cat-pop-head">
+                        <div className="ttl">ค้นหาใน {c.name}</div>
+                        <button type="button" className="x" aria-label="Close" onClick={() => setOpenCatId(null)}>
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="cat-pop-actions">
+                        <button type="button" className="act all" onClick={() => searchByCategory(c.id)}>
+                          ดูทั้งหมดในหมวดนี้
+                        </button>
+                      </div>
+
+                      <div className="cat-pop-list">
+                        {subs.length ? (
+                          subs.map((s) => (
+                            <button
+                              type="button"
+                              key={s.id}
+                              className="cat-pop-item"
+                              onClick={() => searchBySubcategory(s.id)}
+                            >
+                              <span className="name">{s.name}</span>
+                              <span className="go">ค้นหา</span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="cat-pop-empty">ยังไม่มีหมวดย่อย</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               );
             })}
         </div>
       </section>
 
-      {/* Best sellers */}
-      <section className="best-sellers">
-        <h2>🌟 สินค้าขายดี</h2>
-        {loading.best ? (
-          <div className="info-inline">กำลังโหลด…</div>
-        ) : bestSellers.length ? (
-          <div className="product-grid fullwidth">
-            {bestSellers.map((item) => <ProductCard key={item.id} p={item} />)}
-          </div>
-        ) : (
-          <div className="info-inline">{err.best || "ไม่มีข้อมูลขายดี"}</div>
-        )}
-      </section>
+      {/* Best sellers — hide when searching */}
+      {!searchResults && (
+        <section className="best-sellers">
+          <h2>🌟 สินค้าขายดี</h2>
+          {loading.best ? (
+            <div className="info-inline">กำลังโหลด…</div>
+          ) : bestSellers.length ? (
+            <div className="product-grid fullwidth">
+              {bestSellers.map((item) => <ProductCard key={item.id} p={item} />)}
+            </div>
+          ) : (
+            <div className="info-inline">{err.best || "ไม่มีข้อมูลขายดี"}</div>
+          )}
+        </section>
+      )}
 
       {/* Results / All */}
       <section className="all-products">
@@ -501,8 +766,6 @@ export default function HomeUser() {
           <div className="info-inline">{(searchResults && err.search) || err.all || "ไม่พบสินค้า"}</div>
         ))}
       </section>
-
-      {/* ไม่ใส่ Footer ในหน้านี้ เพื่อกันซ้อน */}
     </div>
   );
 }

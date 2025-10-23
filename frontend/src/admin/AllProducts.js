@@ -140,7 +140,8 @@ export default function AllProducts() {
                   : `฿${p.priceMin} - ฿${p.priceMax}`}<br/>
                 สต็อก: {p.totalStock}
               </p>
-              <Link to={`/admin/products/${p.id}`} className="btn">ดูรายละเอียด</Link>
+             <Link to={`/admin/products/detail/${p.id ?? p.product_id}`} className="btn">ดูรายละเอียด</Link>
+
             </div>
           </div>
         ))}
